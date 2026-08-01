@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Quillwright.Pdf.Tests</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Quillwright\Quillwright.csproj" />
+    <ProjectReference Include="..\..\src\Quillwright.Pdf\Quillwright.Pdf.csproj" />
+
+    <!-- The accessibility validator lives in Inkwright's layout package, which the exporter itself
+         does not need; the tests use it to check what they produced. -->
+    <PackageReference Include="Inkwright.Layout" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\fixtures\*.doc*" LinkBase="fixtures" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+</Project>

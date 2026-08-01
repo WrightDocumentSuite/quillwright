@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Quillwright.Benchmarks</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Quillwright\Quillwright.csproj" />
+    <ProjectReference Include="..\..\src\Quillwright.Doc\Quillwright.Doc.csproj" />
+    <ProjectReference Include="..\..\src\Quillwright.Pdf\Quillwright.Pdf.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="DocumentFormat.OpenXml" />
+  </ItemGroup>
+
+  <!--
+    NPOI would be the other natural comparison, but every published version of the
+    System.Security.Cryptography.Xml package it depends on carries security advisories, and a
+    library repository should not ship one.
+  -->
+
+
+</Project>

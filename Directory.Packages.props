@@ -1,0 +1,38 @@
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <!--
+    Rendering to PDF is Inkwright's job, and it is consumed as a published package rather than
+    as a project beside this one: a reference out of the repository builds only on the machine
+    that has both checkouts, which is nobody who clones this.
+  -->
+  <ItemGroup Label="PDF">
+    <PackageVersion Include="Inkwright" Version="0.1.2" />
+    <PackageVersion Include="Inkwright.Layout" Version="0.1.2" />
+  </ItemGroup>
+
+  <ItemGroup Label="Testing">
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageVersion Include="xunit.v3" Version="3.2.2" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <PackageVersion Include="DocumentFormat.OpenXml" Version="3.5.1" />
+  </ItemGroup>
+
+  <ItemGroup Label="Benchmarks">
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+  </ItemGroup>
+
+  <ItemGroup Label="Source generator">
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Legacy doc">
+    <PackageVersion Include="System.Text.Encoding.CodePages" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>

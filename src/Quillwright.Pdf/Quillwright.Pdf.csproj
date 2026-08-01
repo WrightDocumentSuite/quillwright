@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Quillwright.Pdf.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RootNamespace>Quillwright.Pdf</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Quillwright.Pdf</PackageId>
+    <Description>Renders Quillwright Word documents to PDF: pagination of text, tables, lists, sections, headers and footers on top of Inkwright. No Office and no native dependency.</Description>
+    <PackageTags>word;docx;pdf;conversion;export;pagination</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Quillwright\Quillwright.csproj" />
+    <PackageReference Include="Inkwright" />
+  </ItemGroup>
+
+</Project>

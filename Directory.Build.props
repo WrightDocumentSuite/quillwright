@@ -1,0 +1,52 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+    <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <NeutralLanguage>en</NeutralLanguage>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package metadata defaults">
+    <Authors>Pavel Deecalov</Authors>
+    <Copyright>Copyright 2026 Pavel Deecalov</Copyright>
+    <Product>Quillwright</Product>
+    <Version>0.2.2</Version>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/WrightDocumentSuite/quillwright.git</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/WrightDocumentSuite/quillwright</PackageProjectUrl>
+    <IsPackable>false</IsPackable>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <!--
+    Source Link ships in the SDK, so a stack trace from a released package can be stepped back
+    into the commit it was built from. The symbols travel as a separate .snupkg rather than
+    inside the package, which is what nuget.org indexes. This is deliberately unconditional:
+    a project sets IsPackable in its own file, which is evaluated after this one, so a
+    condition on it here would never be true.
+  -->
+  <PropertyGroup Label="Debugging a released build">
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <!--
+    The package page gets a README of its own rather than the repository's. They say the same
+    things, but a link in the repository's README is relative to the repository, and nuget.org
+    renders it against nothing: every link into docs/ would be dead on the package page.
+  -->
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)nuget/README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+</Project>

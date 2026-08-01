@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Quillwright.Templates.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RootNamespace>Quillwright.Templates</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Quillwright.Templates</PackageId>
+    <Description>Typed Word templating for Quillwright: fill content controls, {{placeholders}} and MERGEFIELDs from a model, repeat table rows over collections, all through an incremental source generator with no reflection.</Description>
+    <PackageTags>word;docx;template;mailmerge;sourcegenerator;aot</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Quillwright\Quillwright.csproj" />
+    <ProjectReference Include="..\Quillwright.Templates.Generator\Quillwright.Templates.Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <!--
+    Ship the generator inside this package. It is collected in a target rather than in a plain
+    ItemGroup because an ItemGroup is evaluated before anything is built: on a tree with no
+    artifacts/ yet, an Exists() condition there is false, and `dotnet pack` produces a package
+    that installs and then silently generates nothing. Inside a target that runs as pack
+    gathers its files, the build has already happened and the assembly is there.
+
+    The path is taken from the @(Analyzer) the ProjectReference above contributes, so it stays
+    correct whatever UseArtifactsOutput does with the output directory.
+  -->
+  <Target Name="PackTheGenerator" BeforeTargets="_GetPackageFiles">
+    <ItemGroup>
+      <None Include="@(Analyzer)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false"
+            Condition="'%(Filename)' == 'Quillwright.Templates.Generator'" />
+    </ItemGroup>
+
+    <Error Condition="'@(Analyzer)' == ''"
+           Text="The source generator was not built, so this package would ship without it." />
+  </Target>
+
+</Project>

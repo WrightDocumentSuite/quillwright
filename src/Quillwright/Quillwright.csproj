@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Quillwright.Tests" />
+    <InternalsVisibleTo Include="Quillwright.Templates" />
+    <InternalsVisibleTo Include="Quillwright.Templates.Tests" />
+    <InternalsVisibleTo Include="Quillwright.Doc" />
+    <InternalsVisibleTo Include="Quillwright.Doc.Tests" />
+    <InternalsVisibleTo Include="Quillwright.Pdf" />
+    <InternalsVisibleTo Include="Quillwright.Pdf.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RootNamespace>Quillwright</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Quillwright</PackageId>
+    <Description>Modern .NET 10 Word (.docx) library: layered like System.Text.Json — primitives, constant-memory streaming reader/writer, mutable DOM. Data-oriented paragraph storage, lossless round-trip of real documents, async-first I/O, AOT/trim safe.</Description>
+    <PackageTags>word;docx;wordprocessing;openxml;ooxml;streaming;aot</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+</Project>

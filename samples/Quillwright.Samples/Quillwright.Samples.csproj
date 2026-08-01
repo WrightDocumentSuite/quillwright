@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Quillwright.Samples</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Quillwright\Quillwright.csproj" />
+    <ProjectReference Include="..\..\src\Quillwright.Templates\Quillwright.Templates.csproj" />
+    <ProjectReference Include="..\..\src\Quillwright.Doc\Quillwright.Doc.csproj" />
+    <ProjectReference Include="..\..\src\Quillwright.Templates.Generator\Quillwright.Templates.Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Quillwright.Tests</RootNamespace>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Quillwright\Quillwright.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\fixtures\*.doc*" LinkBase="fixtures" CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- Where the reference corpora live is one answer for every test project, so the file is
+         shared rather than copied; its namespace is a using so the tests read as before. -->
+    <Compile Include="..\ReferenceCorpus.cs" Link="ReferenceCorpus.cs" />
+    <Using Include="Quillwright.Testing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="DocumentFormat.OpenXml" />
+  </ItemGroup>
+
+</Project>

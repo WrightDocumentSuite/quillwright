@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Quillwright.Doc.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RootNamespace>Quillwright.Doc</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Quillwright.Doc</PackageId>
+    <Description>Reads legacy Word 97-2003 (.doc) binary documents into the Quillwright model, so they can be inspected or saved as .docx. Implements the [MS-DOC] compound file, piece table and formatting streams directly, with no Office dependency.</Description>
+    <PackageTags>word;doc;binary;legacy;ms-doc;conversion</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Quillwright\Quillwright.csproj" />
+  </ItemGroup>
+
+</Project>

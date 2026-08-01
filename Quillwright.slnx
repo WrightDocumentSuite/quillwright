@@ -1,0 +1,21 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Quillwright/Quillwright.csproj" />
+    <Project Path="src/Quillwright.Templates/Quillwright.Templates.csproj" />
+    <Project Path="src/Quillwright.Templates.Generator/Quillwright.Templates.Generator.csproj" />
+    <Project Path="src/Quillwright.Doc/Quillwright.Doc.csproj" />
+    <Project Path="src/Quillwright.Pdf/Quillwright.Pdf.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Quillwright.Tests/Quillwright.Tests.csproj" />
+    <Project Path="tests/Quillwright.Templates.Tests/Quillwright.Templates.Tests.csproj" />
+    <Project Path="tests/Quillwright.Doc.Tests/Quillwright.Doc.Tests.csproj" />
+    <Project Path="tests/Quillwright.Pdf.Tests/Quillwright.Pdf.Tests.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Quillwright.Benchmarks/Quillwright.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Quillwright.Samples/Quillwright.Samples.csproj" />
+  </Folder>
+</Solution>
