@@ -158,9 +158,9 @@ await markdown.SaveAsync("quarterly-markdown");
 
 | | Generate | Allocated | Read | Allocated |
 | --- | ---: | ---: | ---: | ---: |
-| **Quillwright streaming** | **17.0 ms** | **17.8 MB** | **16.6 ms** | **16.8 MB** |
-| Quillwright model | 32.7 ms | 18.3 MB | 27.4 ms | 18.3 MB |
-| Open XML SDK 3.5 | 46.8 ms | 18.7 MB | 58.1 ms | 15.8 MB |
+| **Quillwright streaming** | **26.6 ms** | **17.8 MB** | **27.7 ms** | 16.8 MB |
+| Quillwright model | 43.4 ms | 21.8 MB | 39.6 ms | 18.3 MB |
+| Open XML SDK 3.5 | 69.2 ms | 18.7 MB | 101.2 ms | **15.8 MB** |
 
 ## Packages
 

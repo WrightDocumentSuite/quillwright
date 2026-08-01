@@ -5,7 +5,8 @@ dotnet run -c Release --project benchmarks/Quillwright.Benchmarks -- --filter *
 ```
 
 BenchmarkDotNet 0.15.8, .NET 10.0.10, Windows Server 2022, Intel Core i7-8700, 3 warmup and
-10 measured iterations per method.
+10 measured iterations per method. The tables below are the slower of two consecutive runs, so
+a re-run on a quieter machine should come out at or under them.
 
 The comparison is against the Open XML SDK 3.5, which is the reference implementation and the
 thing most .NET code uses today. NPOI would be the other natural comparison, but every
@@ -18,17 +19,17 @@ Every tenth paragraph is bold, so the writer cannot collapse the run properties 
 
 | | Mean | Ratio | Allocated |
 | --- | ---: | ---: | ---: |
-| **Quillwright streaming** | **17.0 ms** | **1.00** | **17.8 MB** |
-| Quillwright model | 32.7 ms | 1.93 | 18.3 MB |
-| Open XML SDK 3.5 | 46.8 ms | 2.76 | 18.7 MB |
+| **Quillwright streaming** | **26.6 ms** | **1.00** | **17.8 MB** |
+| Quillwright model | 43.4 ms | 1.63 | 21.8 MB |
+| Open XML SDK 3.5 | 69.2 ms | 2.60 | 18.7 MB |
 
 ## Reading 20 000 paragraphs
 
 | | Mean | Ratio | Allocated |
 | --- | ---: | ---: | ---: |
-| Quillwright model | 27.4 ms | 1.00 | 18.3 MB |
-| **Quillwright streaming text** | **16.6 ms** | **0.61** | 16.8 MB |
-| Open XML SDK 3.5 | 58.1 ms | 2.13 | 15.8 MB |
+| Quillwright model | 39.6 ms | 1.00 | 18.3 MB |
+| **Quillwright streaming text** | **27.7 ms** | **0.70** | 16.8 MB |
+| Open XML SDK 3.5 | 101.2 ms | 2.57 | 15.8 MB |
 
 ## The legacy binary format, 20 000 paragraphs
 
@@ -38,8 +39,8 @@ the newer one rather than how the library ranks.
 
 | | Mean | Allocated |
 | --- | ---: | ---: |
-| Write `.doc` | 56.2 ms | 48.3 MB |
-| Read `.doc` | 58.2 ms | 49.6 MB |
+| Write `.doc` | 88.3 ms | 48.3 MB |
+| Read `.doc` | 77.1 ms | 51.0 MB |
 
 Both directions are around twice the time and nearly three times the allocation of the same
 document as `.docx`, and the reason is structural rather than sloppy. A `.docx` is written in
@@ -51,10 +52,11 @@ formatting pages that have to be indexed before the first paragraph can be produ
 
 ## Reading it honestly
 
-Quillwright is roughly two to three times faster than the SDK on both paths, and allocates
-about the same. It is not an order of magnitude, and the allocation figures are not better —
-the SDK allocates slightly less when reading, because it builds a lazier tree than a full
-document model does.
+Quillwright is between 2.6 and 3.7 times faster than the SDK depending on the path, and
+allocates about the same. It is not an order of magnitude, and the allocation figures are not
+better — the SDK allocates less on both paths than the document model does, because it builds
+a lazier tree. Only the streaming writer, which never builds a model at all, comes out ahead
+of it on memory as well as time.
 
 Where the design pays off is in the shape of the work rather than these totals. The streaming
 writer produces the same markup as the model for half the time, and the streaming reader beats
