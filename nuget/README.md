@@ -41,8 +41,12 @@ await doc.SaveAsync("agreement.docx");
   metrics: wrapping and justification, hyphenation, tables with merged cells and repeating
   headers, footnotes, headers and footers with working page numbers, text flowing round
   floating pictures, right-to-left scripts. Optionally tagged for PDF/UA.
-- **Markdown and HTML, both ways.** Deterministic export and an import that inverts it; the
-  HTML parser implements the WHATWG parsing algorithm rather than approximating it.
+- **Markdown and HTML, both ways.** Deterministic export and import over a documented semantic
+  subset; this is not a lossless round trip. The HTML parser implements the WHATWG parsing
+  algorithm rather than approximating it, and diagnostics identify deliberate approximations.
+- **RTF 1.9.1 as a semantic conversion.** `Quillwright.Rtf` imports and exports Unicode and
+  code pages, direct character/paragraph formatting, tab stops, breaks and comments without
+  starting Word.
 - **Async-first I/O** on the .NET 10 asynchronous `ZipArchive` APIs, AOT- and trim-safe.
 
 ## Packages
@@ -53,6 +57,7 @@ await doc.SaveAsync("agreement.docx");
 | [`Quillwright.Templates`](https://www.nuget.org/packages/Quillwright.Templates) | Typed templating and its incremental source generator |
 | [`Quillwright.Doc`](https://www.nuget.org/packages/Quillwright.Doc) | Reading and writing Word 97-2003 `.doc` files |
 | [`Quillwright.Pdf`](https://www.nuget.org/packages/Quillwright.Pdf) | Rendering to PDF on top of Inkwright: pagination, tables, tagging |
+| [`Quillwright.Rtf`](https://www.nuget.org/packages/Quillwright.Rtf) | Semantic import and export of the supported RTF 1.9.1 subset |
 
 ## Documentation
 
@@ -66,6 +71,9 @@ read, written, preserved and evaluated, format by format, with the boundary of e
 - [Editing, search and revisions](https://github.com/WrightDocumentSuite/quillwright/blob/main/docs/editing.md)
 - [Rendering to PDF](https://github.com/WrightDocumentSuite/quillwright/blob/main/docs/pdf-export.md)
 - [Templates](https://github.com/WrightDocumentSuite/quillwright/blob/main/docs/templates.md)
+- [Loading untrusted input](https://github.com/WrightDocumentSuite/quillwright/blob/main/docs/loading-untrusted-input.md)
+- [Importing RTF](https://github.com/WrightDocumentSuite/quillwright/blob/main/docs/rtf-import.md)
+- [Exporting RTF](https://github.com/WrightDocumentSuite/quillwright/blob/main/docs/rtf-export.md)
 
 ## Deliberate limits
 
@@ -73,7 +81,8 @@ The core has no layout engine, so `AutoFit` is not resolved and a field that nee
 left for Word to recompute; pagination lives in `Quillwright.Pdf`. SmartArt survives a round
 trip but has no API; embedded objects, web extensions and macros are read but never authored,
 and a chart is read and its data replaced but never created. Encryption is read four ways and
-written one. RTF and ODT are not read or written; Markdown and HTML are, both ways. Writing
+written one. RTF, Markdown and HTML are semantic conversions in both directions; ODT is not
+read or written. Writing
 `.doc` is a conversion rather than a round trip, with a warning naming whatever changed.
 
 Which of these is read, written, preserved or evaluated — and where each one stops — is in the

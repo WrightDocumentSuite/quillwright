@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Quillwright.Diagnostics;
 using Quillwright.IO;
 using Quillwright.Model;
 
@@ -53,8 +54,9 @@ internal static class GraphChartReader
 
     /// <summary>Reads the chart inside an embedded Microsoft Graph object.</summary>
     /// <param name="embedded">The object, as it came out of the pool.</param>
+    /// <param name="budget">Optional limits inherited from the outer document load.</param>
     /// <returns>The chart, or <see langword="null"/> when the object holds nothing readable.</returns>
-    public static Chart? Read(EmbeddedObject embedded)
+    public static Chart? Read(EmbeddedObject embedded, DocumentLoadBudget? budget = null)
     {
         byte[] content = embedded.Content.ToArray();
         if (!CompoundFile.IsCompoundFile(content))
@@ -63,7 +65,7 @@ internal static class GraphChartReader
         byte[]? workbook;
         try
         {
-            workbook = CompoundFile.Open(content).ReadStream(WorkbookStream);
+            workbook = CompoundFile.Open(content, budget).ReadStream(WorkbookStream);
         }
         catch (InvalidDataException)
         {

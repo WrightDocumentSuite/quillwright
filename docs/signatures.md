@@ -58,6 +58,18 @@ signature whose value verifies over a document somebody has since edited is exac
 `SignedInfo` digests the object holding the manifest. A manifest swapped after signing leaves
 the value verifying and the inner references failing, which is what that flag reports.
 
+Same-document references are resolved fail-closed. A URI such as `#idPackageObject` is valid
+only when exactly one element in the signature has that exact, case-sensitive `Id` value;
+Quillwright never chooses the first or last of duplicate targets. The OPC package object must
+also be a direct child of `Signature`, contain exactly one direct `Manifest`, and have exactly
+one direct reference from `SignedInfo`. An ambiguous or malformed structure makes
+`SignedInfoIntact` `false`, leaves `Parts` empty and reports `Status` as `Unverified`, even when
+the mathematical signature over the unchanged `SignedInfo` bytes still verifies.
+
+The manifest is interpreted only after the `#idPackageObject` reference itself has been
+successfully reproduced. If that reference fails, or names an unsupported digest or transform,
+the manifest cannot authorise a set of covered parts and is not presented as one.
+
 **Is the signer anybody to believe?** `CheckTrust()`, and only when you ask. Chain building
 reaches the network, depends on a certificate store that changes underneath it, and answers
 only as well as the policy behind it — none of which belongs in something read once while a

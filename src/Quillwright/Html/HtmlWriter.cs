@@ -74,10 +74,11 @@ internal static class HtmlWriter
 
     private static readonly string[] QuoteStyles = ["Quote", "IntenseQuote", "Intense Quote"];
     private static readonly string[] CodeStyles = ["Code", "CodeBlock", "Code Block", "HTMLPreformatted", "HTML Preformatted", "PlainText", "Plain Text"];
+    private static readonly string[] ListContinuationStyles = ["ListParagraph", "List Paragraph"];
 
     private static void WriteParagraph(StringBuilder html, Paragraph paragraph, HtmlContext context)
     {
-        ParagraphFormat format = context.Resolver.ResolveParagraphFormat(paragraph);
+        ParagraphFormat format = context.ResolveParagraphFormat(paragraph);
 
         if (paragraph.IsEmpty && format.Borders?.Bottom is { IsEmpty: false })
         {
@@ -188,37 +189,41 @@ internal static class HtmlWriter
 
     private static bool IsListItem(Paragraph paragraph, HtmlContext context)
     {
-        ParagraphFormat format = context.Resolver.ResolveParagraphFormat(paragraph);
+        ParagraphFormat format = context.ResolveParagraphFormat(paragraph);
         return format.NumberingId is { } id && id > 0 &&
-               context.Document.Numbering.ResolveLevel(id, format.NumberingLevel ?? 0) is { Format: not ListNumberFormat.None };
+               context.Numbering.ResolveLevel(id, format.NumberingLevel ?? 0) is not null;
     }
 
     /// <summary>
-    /// One Word list becomes nested <c>ul</c> and <c>ol</c> elements: consecutive items of one
-    /// instance, levels opening and closing as the depth moves, the kind of each level taken
-    /// from its own numbering definition, and explicit values where Word's counting departs
-    /// from HTML's.
+    /// One logical Word list becomes nested <c>ul</c> and <c>ol</c> elements: levels open and
+    /// close as the depth moves, nested lists may use their own numbering instances, and
+    /// restart instances stay in the same HTML list through explicit item values.
     /// </summary>
     private static void WriteList(StringBuilder html, IList<Block> blocks, ref int index, HtmlContext context)
     {
-        var open = new Stack<(string Tag, int Expected)>();
-        int firstId = -1;
+        var open = new List<OpenListState>();
         int previousLevel = -1;
 
         while (index < blocks.Count && blocks[index] is Paragraph paragraph)
         {
-            ParagraphFormat format = context.Resolver.ResolveParagraphFormat(paragraph);
+            int continuationLevel = ListContinuationLevel(paragraph, open, context);
+            if (continuationLevel >= 0)
+            {
+                while (open.Count - 1 > continuationLevel)
+                    CloseList(html, open);
+
+                WriteParagraph(html, paragraph, context);
+                previousLevel = continuationLevel;
+                index++;
+                continue;
+            }
+
+            ParagraphFormat format = context.ResolveParagraphFormat(paragraph);
             if (format.NumberingId is not { } id || id <= 0 ||
-                context.Document.Numbering.ResolveLevel(id, format.NumberingLevel ?? 0) is not { } levelDefinition ||
-                levelDefinition.Format == ListNumberFormat.None)
+                context.Numbering.ResolveLevel(id, format.NumberingLevel ?? 0) is not { } levelDefinition)
             {
                 break;
             }
-
-            if (firstId < 0)
-                firstId = id;
-            else if (id != firstId)
-                break;
 
             int level = Math.Clamp(format.NumberingLevel ?? 0, 0, 8);
             if (previousLevel < 0 && level > 0)
@@ -226,23 +231,46 @@ internal static class HtmlWriter
             else if (previousLevel >= 0 && level > previousLevel + 1)
                 level = previousLevel + 1;
 
+            if (open.Count > 0 && !BelongsToOpenList(open, id, level, previousLevel, context))
+            {
+                // Two different lists at the same nested depth are siblings owned by the
+                // still-open parent li. Close only the old nested list, not its owner.
+                if (level == 0 || level >= open.Count || !open[level - 1].ItemOpen)
+                    break;
+                while (open.Count > level)
+                    CloseList(html, open);
+                previousLevel = level - 1;
+            }
+
             NumberLabel label = context.Lists.Next(format)!.Value;
 
             while (open.Count - 1 > level)
                 CloseList(html, open);
 
-            if (open.Count - 1 < level || open.Count == 0)
-                OpenList(html, open, levelDefinition, label.Value);
+            if (open.Count == 0 || open.Count - 1 < level)
+            {
+                if (open.Count > 0)
+                    html.Append('\n');
+                OpenList(html, open, levelDefinition, label.Value, id, context);
+            }
+            else
+            {
+                CloseItem(html, open[level]);
+            }
 
-            (string tag, int expected) = open.Pop();
+            OpenListState current = open[level];
+            current.NumberingIds.Add(id);
+            string itemMarker = HtmlListStyle.FromLevel(levelDefinition);
             html.Append("<li");
-            if (tag == "ol" && label.Value != expected)
+            if (current.Tag == "ol" && label.Value != current.Expected)
                 html.Append(" value=\"").Append(label.Value.ToString(CultureInfo.InvariantCulture)).Append('"');
+            if (itemMarker != current.Marker)
+                html.Append(" style=\"list-style-type:").Append(itemMarker).Append('"');
 
             html.Append('>');
             HtmlInlineWriter.Render(html, paragraph, context);
-            html.Append("</li>\n");
-            open.Push((tag, label.Value + 1));
+            current.ItemOpen = true;
+            current.Expected = label.Value + 1;
 
             previousLevel = level;
             index++;
@@ -252,19 +280,78 @@ internal static class HtmlWriter
             CloseList(html, open);
     }
 
-    private static void OpenList(StringBuilder html, Stack<(string Tag, int Expected)> open, NumberingLevel level, int firstValue)
+    private static int ListContinuationLevel(
+        Paragraph paragraph,
+        List<OpenListState> open,
+        HtmlContext context)
     {
-        bool ordered = level.Format is not ListNumberFormat.Bullet;
+        if (open.Count == 0 || !IsStyled(paragraph, context, ListContinuationStyles))
+            return -1;
+
+        ParagraphFormat format = context.ResolveParagraphFormat(paragraph);
+        if (format.NumberingId is not null || format.IndentLeft is not { } indent)
+            return -1;
+
+        for (int level = open.Count - 1; level >= 0; level--)
+        {
+            if (open[level].ItemOpen && open[level].ContinuationIndentTwips == indent.Twips)
+                return level;
+        }
+
+        return -1;
+    }
+
+    private static bool BelongsToOpenList(
+        List<OpenListState> open,
+        int numberingId,
+        int level,
+        int previousLevel,
+        HtmlContext context)
+    {
+        if (level < open.Count && open[level].NumberingIds.Contains(numberingId))
+            return true;
+
+        // A deeper paragraph starts a nested list. Its numbering instance can differ from
+        // its parent's: HTML gives each nested ul/ol its own start and marker kind.
+        if (level > previousLevel)
+            return true;
+
+        if (level >= open.Count)
+            return false;
+
+        OpenListState current = open[level];
+        NumberingInstance? instance = context.Numbering.FindInstance(numberingId);
+        bool restart = instance?.AbstractId == current.AbstractId &&
+                       instance.Overrides.Any(candidate =>
+                           candidate.Level == level && candidate.StartOverride is not null);
+        if (restart)
+            current.NumberingIds.Add(numberingId);
+
+        return restart;
+    }
+
+    private static void OpenList(
+        StringBuilder html,
+        List<OpenListState> open,
+        NumberingLevel level,
+        int firstValue,
+        int numberingId,
+        HtmlContext context)
+    {
+        NumberingLevel containerLevel = context.Numbering.ResolveDefinition(numberingId)?
+            .Levels.FirstOrDefault(candidate => candidate.Level == level.Level) ?? level;
+        string marker = HtmlListStyle.FromLevel(containerLevel);
+        bool ordered = containerLevel.Format is not (ListNumberFormat.Bullet or ListNumberFormat.None);
         string tag = ordered ? "ol" : "ul";
         html.Append('<').Append(tag);
         if (ordered)
         {
-            string? type = level.Format switch
+            string? type = marker switch
             {
-                ListNumberFormat.LowerRoman => "i",
-                ListNumberFormat.UpperRoman => "I",
-                ListNumberFormat.LowerLetter => "a",
-                ListNumberFormat.UpperLetter => "A",
+                "lower-roman" => "i",
+                "upper-roman" => "I",
+                "lower-latin" => "a",
+                "upper-latin" => "A",
                 _ => null,
             };
 
@@ -274,12 +361,59 @@ internal static class HtmlWriter
                 html.Append(" start=\"").Append(firstValue.ToString(CultureInfo.InvariantCulture)).Append('"');
         }
 
+        if (marker is "decimal-leading-zero" or "circle" or "square" or "none")
+            html.Append(" style=\"list-style-type:").Append(marker).Append('"');
+
         html.Append(">\n");
-        open.Push((tag, firstValue));
+        int abstractId = context.Numbering.FindInstance(numberingId)?.AbstractId ?? -1;
+        open.Add(new OpenListState(
+            tag,
+            marker,
+            firstValue,
+            numberingId,
+            abstractId,
+            containerLevel.ParagraphFormat.IndentLeft?.Twips));
     }
 
-    private static void CloseList(StringBuilder html, Stack<(string Tag, int Expected)> open) =>
-        html.Append("</").Append(open.Pop().Tag).Append(">\n");
+    private static void CloseItem(StringBuilder html, OpenListState open)
+    {
+        if (!open.ItemOpen)
+            return;
+
+        html.Append("</li>\n");
+        open.ItemOpen = false;
+    }
+
+    private static void CloseList(StringBuilder html, List<OpenListState> open)
+    {
+        OpenListState current = open[^1];
+        CloseItem(html, current);
+        html.Append("</").Append(current.Tag).Append(">\n");
+        open.RemoveAt(open.Count - 1);
+    }
+
+    private sealed class OpenListState(
+        string tag,
+        string marker,
+        int expected,
+        int numberingId,
+        int abstractId,
+        int? continuationIndentTwips)
+    {
+        public string Tag { get; } = tag;
+
+        public string Marker { get; } = marker;
+
+        public int Expected { get; set; } = expected;
+
+        public int AbstractId { get; } = abstractId;
+
+        public bool ItemOpen { get; set; }
+
+        public int? ContinuationIndentTwips { get; } = continuationIndentTwips;
+
+        public HashSet<int> NumberingIds { get; } = [numberingId];
+    }
 
     private static void WriteTable(StringBuilder html, Table table, HtmlContext context)
     {

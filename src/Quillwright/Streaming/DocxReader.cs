@@ -43,7 +43,16 @@ public sealed class DocxReader : IAsyncDisposable
     /// <param name="path">Path to the file.</param>
     /// <param name="cancellationToken">Cancels the open.</param>
     public static async ValueTask<DocxReader> OpenAsync(string path, CancellationToken cancellationToken = default)
+        => await OpenWithOptionsAsync(path, LoadOptions.Default, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Opens a document for streaming reads with explicit resource limits.</summary>
+    /// <param name="path">Path to the file.</param>
+    /// <param name="options">Package fidelity, password and resource limits.</param>
+    /// <param name="cancellationToken">Cancels the open.</param>
+    public static async ValueTask<DocxReader> OpenWithOptionsAsync(
+        string path, LoadOptions options, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(options);
         FileStream stream = new(path, new FileStreamOptions
         {
             Mode = FileMode.Open,
@@ -54,7 +63,7 @@ public sealed class DocxReader : IAsyncDisposable
 
         try
         {
-            return await OpenAsync(stream, ownsStream: true, cancellationToken).ConfigureAwait(false);
+            return await OpenAsync(stream, ownsStream: true, options, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -67,7 +76,18 @@ public sealed class DocxReader : IAsyncDisposable
     /// <param name="stream">Stream positioned at the start of the package.</param>
     /// <param name="cancellationToken">Cancels the open.</param>
     public static ValueTask<DocxReader> OpenAsync(Stream stream, CancellationToken cancellationToken = default) =>
-        OpenAsync(stream, ownsStream: false, cancellationToken);
+        OpenAsync(stream, ownsStream: false, LoadOptions.Default, cancellationToken);
+
+    /// <summary>Opens a document for streaming reads with explicit resource limits. The stream is left open.</summary>
+    /// <param name="stream">Stream positioned at the start of the package.</param>
+    /// <param name="options">Package fidelity, password and resource limits.</param>
+    /// <param name="cancellationToken">Cancels the open.</param>
+    public static ValueTask<DocxReader> OpenWithOptionsAsync(
+        Stream stream, LoadOptions options, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return OpenAsync(stream, ownsStream: false, options, cancellationToken);
+    }
 
     /// <summary>The blocks of the body, in order.</summary>
     /// <param name="cancellationToken">Stops the enumeration.</param>
@@ -123,9 +143,11 @@ public sealed class DocxReader : IAsyncDisposable
             await _ownedStream.DisposeAsync().ConfigureAwait(false);
     }
 
-    private static async ValueTask<DocxReader> OpenAsync(Stream stream, bool ownsStream, CancellationToken cancellationToken)
+    private static async ValueTask<DocxReader> OpenAsync(
+        Stream stream, bool ownsStream, LoadOptions options, CancellationToken cancellationToken)
     {
-        OpcPackage package = await OpcPackage.OpenReadAsync(stream, leaveOpen: true, cancellationToken).ConfigureAwait(false);
+        OpcPackage package = await OpcPackage.OpenReadAsync(
+            stream, leaveOpen: true, cancellationToken, options.Password, options.Budget).ConfigureAwait(false);
         var preserved = new PreservedPackage
         {
             ContentTypes = await package.GetContentTypesAsync(cancellationToken).ConfigureAwait(false),
@@ -142,7 +164,7 @@ public sealed class DocxReader : IAsyncDisposable
 
         WordDocument shell = WordDocument.CreateEmpty();
         shell.Preserved = preserved;
-        return new DocxReader(package, ownsStream ? stream : null, shell, new LoadContext(shell, LoadOptions.Default, preserved), mainPart);
+        return new DocxReader(package, ownsStream ? stream : null, shell, new LoadContext(shell, options, preserved), mainPart);
     }
 
     private static bool MoveToBody(XmlReader xml)

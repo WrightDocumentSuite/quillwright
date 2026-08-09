@@ -1,3 +1,5 @@
+using Quillwright.Diagnostics;
+
 namespace Quillwright.Html;
 
 /// <summary>
@@ -63,7 +65,7 @@ internal sealed partial class HtmlTreeBuilder
 
     /// <summary>The element types that stop the ordinary scope walk.</summary>
     private static readonly string[] ScopeBoundary =
-        ["applet", "caption", "html", "table", "td", "th", "marquee", "object", "template"];
+        ["applet", "caption", "html", "table", "td", "th", "marquee", "object", "select", "template"];
 
     /// <summary>What implied end tags close, unless the caller names an exception.</summary>
     private static readonly string[] ImpliedEndTags =
@@ -75,7 +77,10 @@ internal sealed partial class HtmlTreeBuilder
          "tfoot", "th", "thead", "tr"];
 
     private readonly HtmlTokenizer _tokenizer;
+    private readonly DocumentLoadBudgetState? _budget;
     private readonly HtmlElement _document = new("#document");
+    private readonly HtmlElement? _fragment;
+    private readonly HtmlElement? _context;
     private readonly List<HtmlElement> _stack = [];
     private readonly List<HtmlElement?> _formatting = [];
     private readonly List<Mode> _templateModes = [];
@@ -92,7 +97,67 @@ internal sealed partial class HtmlTreeBuilder
     private bool _done;
     private bool _ignoreNextLineFeed;
 
-    internal HtmlTreeBuilder(string input) => _tokenizer = new HtmlTokenizer(input);
+    internal HtmlTreeBuilder(string input, DocumentLoadBudgetState? budget = null)
+    {
+        _budget = budget;
+        _budget?.AddMarkupNode(); // #document
+        _tokenizer = new HtmlTokenizer(input, CanStartCdata);
+    }
+
+    /// <summary>Creates the fragment parser with the supplied element as its context.</summary>
+    internal HtmlTreeBuilder(string input, HtmlElement context, DocumentLoadBudgetState? budget = null)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        _budget = budget;
+        _budget?.AddMarkupNode(2); // #document and #document-fragment
+        _context = context;
+        _fragment = new HtmlElement("#document-fragment");
+        _tokenizer = new HtmlTokenizer(input, CanStartCdata);
+
+        if (context.Namespace == HtmlNamespace.Html)
+        {
+            switch (context.Name)
+            {
+                case "title" or "textarea":
+                    _tokenizer.SwitchToRcdata();
+                    break;
+
+                case "style" or "xmp" or "iframe" or "noembed" or "noframes":
+                    _tokenizer.SwitchToRawtext();
+                    break;
+
+                case "script":
+                    _tokenizer.SwitchToScriptData();
+                    break;
+
+                // Scripting is disabled for imports, so noscript deliberately stays in Data.
+                case "plaintext":
+                    _tokenizer.SwitchToPlaintext();
+                    break;
+            }
+        }
+
+        var root = new HtmlElement("html");
+        _budget?.AddMarkupNode();
+        _budget?.EnsureMarkupDepth(1);
+        _document.Append(root);
+        _stack.Add(root);
+
+        if (context.Is("template"))
+            _templateModes.Add(Mode.InTemplate);
+
+        ResetInsertionMode();
+
+        for (HtmlElement? ancestor = context; ancestor is not null; ancestor = ancestor.Parent)
+        {
+            if (!ancestor.Is("form"))
+                continue;
+
+            _form = ancestor;
+            break;
+        }
+    }
 
     /// <summary>Parses the whole input and hands back the document node.</summary>
     public HtmlElement Build()
@@ -105,11 +170,23 @@ internal sealed partial class HtmlTreeBuilder
                 break;
         }
 
-        return _document;
+        return _fragment ?? _document;
     }
 
     /// <summary>The current node: the bottommost element of the stack of open elements.</summary>
     private HtmlElement? Current => _stack.Count > 0 ? _stack[^1] : null;
+
+    /// <summary>
+    /// The node whose namespace controls tokenizer decisions. It is the current node for a
+    /// document parser; fragment parsing can substitute its context element here.
+    /// </summary>
+    private HtmlElement? AdjustedCurrent =>
+        _context is not null && _stack.Count == 1 ? _context : Current;
+
+    /// <summary>Whether this parser's fragment context is the named HTML element.</summary>
+    private bool FragmentContextIs(string name) => _context?.Is(name) == true;
+
+    private bool CanStartCdata() => AdjustedCurrent is { Namespace: not HtmlNamespace.Html };
 
     /// <summary>
     /// The tree construction dispatcher of §13.2.6: HTML rules unless the current node is
@@ -117,7 +194,7 @@ internal sealed partial class HtmlTreeBuilder
     /// </summary>
     private void Dispatch(HtmlToken token)
     {
-        HtmlElement? current = Current;
+        HtmlElement? current = AdjustedCurrent;
         bool html = current is null
             || current.Namespace == HtmlNamespace.Html
             || token.Kind == HtmlTokenKind.EndOfFile
@@ -159,7 +236,7 @@ internal sealed partial class HtmlTreeBuilder
     /// </summary>
     private (HtmlElement Parent, int Index) AppropriatePlace(HtmlElement? overrideTarget = null)
     {
-        HtmlElement target = overrideTarget ?? Current ?? _document;
+        HtmlElement target = RootInsertionTarget(overrideTarget ?? Current ?? _document);
 
         if (_fosterParenting && target.IsAny("table", "tbody", "tfoot", "thead", "tr"))
         {
@@ -173,7 +250,10 @@ internal sealed partial class HtmlTreeBuilder
             }
 
             if (lastTable is null)
-                return (_stack[0], _stack[0].Children.Count);
+            {
+                HtmlElement root = RootInsertionTarget(_stack[0]);
+                return (root, root.Children.Count);
+            }
 
             if (lastTable.Parent is { } parent)
                 return (parent, parent.Children.IndexOf(lastTable));
@@ -184,6 +264,11 @@ internal sealed partial class HtmlTreeBuilder
 
         return (target, target.Children.Count);
     }
+
+    private HtmlElement RootInsertionTarget(HtmlElement target) =>
+        _fragment is not null && _stack.Count > 0 && ReferenceEquals(target, _stack[0])
+            ? _fragment
+            : target;
 
     private HtmlElement? LastOnStack(string name)
     {
@@ -199,8 +284,9 @@ internal sealed partial class HtmlTreeBuilder
     /// <summary>Creates an element for a token, remembering the token so it can be recreated.</summary>
     private HtmlElement CreateFor(HtmlToken token, HtmlNamespace space = HtmlNamespace.Html)
     {
+        _budget?.AddMarkupNode();
         var element = new HtmlElement(token.TagName, space) { Line = token.Line };
-        element.Attributes.AddRange(token.Attributes);
+        element.AddAttributes(token.Attributes);
         _tokensByElement[element] = token.Clone();
         return element;
     }
@@ -208,6 +294,7 @@ internal sealed partial class HtmlTreeBuilder
     /// <summary>Inserts an HTML element for a token and pushes it onto the stack.</summary>
     private HtmlElement InsertElement(HtmlToken token, HtmlNamespace space = HtmlNamespace.Html)
     {
+        _budget?.EnsureMarkupDepth(_stack.Count + 1);
         HtmlElement element = CreateFor(token, space);
         (HtmlElement parent, int index) = AppropriatePlace();
         parent.Insert(index, element);
@@ -236,20 +323,54 @@ internal sealed partial class HtmlTreeBuilder
             return;
         }
 
+        _budget?.AddMarkupNode();
         parent.Insert(index, new HtmlText(text));
     }
 
     private void InsertComment(HtmlToken token, HtmlElement? target = null)
     {
+        _budget?.AddMarkupNode();
         var comment = new HtmlComment(token.Data.ToString()) { Line = token.Line };
         if (target is not null)
         {
-            target.Append(comment);
+            RootInsertionTarget(target).Append(comment);
             return;
         }
 
         (HtmlElement parent, int index) = AppropriatePlace();
         parent.Insert(index, comment);
+    }
+
+    private void InsertProcessingInstruction(HtmlToken token, HtmlElement? target = null)
+    {
+        _budget?.AddMarkupNode();
+        var instruction = new HtmlProcessingInstruction(
+            token.ProcessingInstructionTarget,
+            token.Data.ToString())
+        {
+            Line = token.Line,
+        };
+
+        if (target is not null)
+        {
+            RootInsertionTarget(target).Append(instruction);
+            return;
+        }
+
+        (HtmlElement parent, int index) = AppropriatePlace();
+        parent.Insert(index, instruction);
+    }
+
+    private void InsertDocumentType(HtmlToken token)
+    {
+        _budget?.AddMarkupNode();
+        _document.Append(new HtmlDocumentType(
+            token.TagName,
+            token.PublicIdentifier ?? string.Empty,
+            token.SystemIdentifier ?? string.Empty)
+        {
+            Line = token.Line,
+        });
     }
 
     // ---- The stack of open elements (§13.2.4.2) ----
@@ -600,8 +721,8 @@ internal sealed partial class HtmlTreeBuilder
     {
         for (int i = _stack.Count - 1; i >= 0; i--)
         {
-            HtmlElement node = _stack[i];
             bool last = i == 0;
+            HtmlElement node = last && _context is not null ? _context : _stack[i];
 
             if (node.IsAny("td", "th") && !last)
             {

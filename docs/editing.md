@@ -156,9 +156,10 @@ of more than two. `Comment.ParentId` and `Comment.IsResolved` can also be set di
 comment made any other way.
 
 The threading part names comments by the paragraph identifier of their last paragraph rather
-than by comment id, so identifiers are minted for comments that have none. It is written only
-when there is threading to record, so a document of plain comments does not grow a part it
-never had.
+than by comment id, so identifiers are minted for comments that have none. A new document of
+plain comments does not grow a part it never had. Once a loaded package carries the part,
+Quillwright regenerates it from the current model even when every reply link and resolved flag
+has been cleared; an earlier `done` or parent link therefore cannot reappear on the next save.
 
 Word 2016 added a second part, `commentsIds.xml` ([MS-DOCX] 2.8), holding an identifier for
 each comment that survives renumbering — what tells two people editing at once that they are

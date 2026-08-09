@@ -15,7 +15,7 @@ namespace Quillwright.Styles;
 internal static class TableRegions
 {
     /// <summary>The regions that apply to a cell, in the order their formatting layers.</summary>
-    public static IEnumerable<TableStyleRegion> For(Table table, TableCell cell)
+    public static IEnumerable<TableStyleRegion> For(Table table, TableCell cell, TableFormat? resolvedTableFormat = null)
     {
         if (cell.Row is not { } row)
             yield break;
@@ -25,7 +25,8 @@ internal static class TableRegions
         if (rowIndex < 0 || columnIndex < 0)
             yield break;
 
-        TableStyleOptions options = table.Format.StyleOptions ?? TableStyleOptions.None;
+        TableFormat format = resolvedTableFormat ?? table.Format;
+        TableStyleOptions options = format.StyleOptions ?? TableStyleOptions.None;
         int rowCount = table.Rows.Count;
         int columnCount = row.Cells.Count;
 
@@ -36,13 +37,13 @@ internal static class TableRegions
 
         if (!options.HasFlag(TableStyleOptions.NoVerticalBanding))
         {
-            int band = Band(columnIndex, firstColumn ? 1 : 0, table.Format.ColumnBandSize ?? 1);
+            int band = Band(columnIndex, firstColumn ? 1 : 0, format.ColumnBandSize ?? 1);
             yield return band % 2 == 0 ? TableStyleRegion.Band1Vertical : TableStyleRegion.Band2Vertical;
         }
 
         if (!options.HasFlag(TableStyleOptions.NoHorizontalBanding))
         {
-            int band = Band(rowIndex, firstRow ? 1 : 0, table.Format.RowBandSize ?? 1);
+            int band = Band(rowIndex, firstRow ? 1 : 0, format.RowBandSize ?? 1);
             yield return band % 2 == 0 ? TableStyleRegion.Band1Horizontal : TableStyleRegion.Band2Horizontal;
         }
 

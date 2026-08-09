@@ -39,12 +39,28 @@ public sealed class PdfExportOptions
     public bool Tagged { get; set; }
 
     /// <summary>
+    /// Whether Word comments become interactive PDF note annotations. Replies remain a thread,
+    /// authors and dates are retained, and a resolved Word message receives an informational reply.
+    /// Word records no resolver identity, so the exporter cannot write the user-specific PDF review
+    /// state without inventing provenance. The default leaves comments out, matching an ordinary
+    /// print.
+    /// </summary>
+    public bool IncludeComments { get; set; }
+
+    /// <summary>
     /// Whether to recompute the result of <c>PAGE</c>, <c>NUMPAGES</c>, <c>SECTIONPAGES</c>
     /// and <c>PAGEREF</c> fields — the ones a table of contents prints its numbers with.
     /// Turning it off prints the result Word cached, which is what a viewer would show for a
     /// document that has not been repaginated.
     /// </summary>
     public bool UpdatePageFields { get; set; } = true;
+
+    /// <summary>
+    /// Whether <c>w:lastRenderedPageBreak</c> hints saved by Word are used to reproduce the
+    /// source pagination.  These hints are especially useful for long fixed-layout tables;
+    /// turn this off after substantial editing so stale hints do not force old page boundaries.
+    /// </summary>
+    public bool HonorLastRenderedPageBreaks { get; set; } = true;
 
     /// <summary>Whether hidden text (<c>w:vanish</c>) is printed.</summary>
     public bool IncludeHiddenText { get; set; }

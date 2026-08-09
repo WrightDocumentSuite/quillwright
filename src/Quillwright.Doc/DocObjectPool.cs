@@ -1,4 +1,5 @@
 using System.Globalization;
+using Quillwright.Diagnostics;
 using Quillwright.Doc.Writing;
 using Quillwright.IO;
 using Quillwright.Model;
@@ -24,7 +25,9 @@ internal static class DocObjectPool
     /// <summary>Reads one object out of the pool, or nothing when the storage is not there.</summary>
     /// <param name="container">The whole file.</param>
     /// <param name="number">The number the field separator's picture location carried.</param>
-    public static EmbeddedObject? Read(CompoundFile container, int number)
+    /// <param name="loadBudget">Optional counters for reconstructed object payloads.</param>
+    public static EmbeddedObject? Read(
+        CompoundFile container, int number, DocumentLoadBudgetState? loadBudget = null)
     {
         string storage = $"{StorageName}/_{number.ToString(CultureInfo.InvariantCulture)}";
         if (!container.HasStorage(storage))
@@ -47,8 +50,9 @@ internal static class DocObjectPool
         if (!any)
             return null;
 
+        loadBudget?.AddEmbeddedObject(writer.EstimateBuildLength());
         byte[] content = writer.Build();
-        OleDescription? description = OleContainer.Describe(content);
+        OleDescription? description = OleContainer.Describe(content, loadBudget?.Budget);
         return new EmbeddedObject
         {
             Location = storage,

@@ -31,7 +31,8 @@ internal sealed class HtmlContext : IInlineExportContext
         MediaDirectoryName = mediaDirectoryName;
         Diagnostics = diagnostics;
         Anchors = new MarkdownAnchorRegistry();
-        Lists = new NumberingCounter(document.Numbering);
+        Numbering = new NumberingResolver(document.Numbering);
+        Lists = new NumberingCounter(Numbering);
         RegisterBookmarks(document.Blocks);
     }
 
@@ -45,6 +46,8 @@ internal sealed class HtmlContext : IInlineExportContext
 
     public MarkdownAnchorRegistry Anchors { get; }
 
+    public NumberingResolver Numbering { get; }
+
     public NumberingCounter Lists { get; }
 
     public IReadOnlyList<HtmlImage> Images => _images;
@@ -52,6 +55,9 @@ internal sealed class HtmlContext : IInlineExportContext
     public IReadOnlyList<HtmlNoteEntry> Notes => _notes;
 
     public StyleResolver Resolver => Document.Resolver;
+
+    public ParagraphFormat ResolveParagraphFormat(Paragraph paragraph) =>
+        Resolver.ResolveParagraphFormat(paragraph, Numbering);
 
     public MarkdownRevisionMode RevisionMode => Options.RevisionMode switch
     {

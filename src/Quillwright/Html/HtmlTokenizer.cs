@@ -4,14 +4,15 @@ namespace Quillwright.Html;
 
 /// <summary>
 /// The tokenizer of the HTML standard (WHATWG HTML §13.2.5): the state machine that turns
-/// characters into character runs, tags, comments and doctypes.
+/// characters into character runs, tags, comments, processing instructions and doctypes.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Every state of the standard is here, including the six that untangle a script element's
 /// escaped and double-escaped content, the RCDATA and RAWTEXT paths with their appropriate
-/// end tag rule, the comment and doctype states with their recovery, CDATA, and the character
-/// reference states with the legacy semicolon-less rule that only applies outside attributes.
+/// end tag rule, the comment and doctype states with their recovery, CDATA, processing
+/// instructions, and the character reference states with the legacy semicolon-less rule that
+/// only applies outside attributes.
 /// Parse errors are not reported — the standard requires a conforming parser to recover
 /// exactly as described, which is what matters here, and it does.
 /// </para>
@@ -27,11 +28,15 @@ internal sealed class HtmlTokenizer
     private const char Replacement = '�';
 
     private readonly string _input;
+    private readonly Func<bool> _canStartCdata;
     private readonly StringBuilder _text = new();
     private readonly Queue<HtmlToken> _output = new();
     private readonly StringBuilder _temporary = new();
     private readonly StringBuilder _attributeName = new();
     private readonly StringBuilder _attributeValue = new();
+    private readonly HashSet<string> _attributeNames;
+    private readonly StringBuilder _doctypePublicIdentifier = new();
+    private readonly StringBuilder _doctypeSystemIdentifier = new();
 
     private int _position;
     private int _line = 1;
@@ -41,11 +46,29 @@ internal sealed class HtmlTokenizer
     private HtmlToken? _tag;
     private HtmlToken? _comment;
     private HtmlToken? _doctype;
+    private HtmlToken? _processingInstruction;
     private string _lastStartTagName = string.Empty;
+    private int _processingInstructionLine;
     private bool _hasAttribute;
+    private bool _hasDoctypePublicIdentifier;
+    private bool _hasDoctypeSystemIdentifier;
     private int _characterReferenceCode;
 
-    internal HtmlTokenizer(string input) => _input = Preprocess(input);
+    internal HtmlTokenizer(string input, Func<bool> canStartCdata)
+        : this(input, canStartCdata, StringComparer.Ordinal)
+    {
+    }
+
+    /// <summary>Test seam for verifying the complexity of duplicate-attribute detection.</summary>
+    internal HtmlTokenizer(
+        string input,
+        Func<bool> canStartCdata,
+        IEqualityComparer<string> attributeNameComparer)
+    {
+        _input = Preprocess(input);
+        _canStartCdata = canStartCdata;
+        _attributeNames = new HashSet<string>(attributeNameComparer);
+    }
 
     /// <summary>
     /// The states of §13.2.5, named as the standard names them. The numbering of the standard
@@ -124,6 +147,11 @@ internal sealed class HtmlTokenizer
         CdataSection,
         CdataSectionBracket,
         CdataSectionEnd,
+        ProcessingInstructionOpen,
+        ProcessingInstructionTarget,
+        AfterProcessingInstructionTarget,
+        ProcessingInstructionData,
+        ProcessingInstructionQuestionable,
         CharacterReference,
         NamedCharacterReference,
         AmbiguousAmpersand,
@@ -209,8 +237,17 @@ internal sealed class HtmlTokenizer
         if (_position + value.Length > _input.Length)
             return false;
 
-        return _input.AsSpan(_position, value.Length).Equals(
-            value, caseInsensitive ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        ReadOnlySpan<char> candidate = _input.AsSpan(_position, value.Length);
+        if (!caseInsensitive)
+            return candidate.SequenceEqual(value);
+
+        for (int i = 0; i < candidate.Length; i++)
+        {
+            if (AsciiLower(candidate[i]) != AsciiLower(value[i]))
+                return false;
+        }
+
+        return true;
     }
 
     private void Advance(int count)
@@ -263,7 +300,11 @@ internal sealed class HtmlTokenizer
     private bool IsAppropriateEndTag() =>
         _tag is not null && string.Equals(_tag.TagName, _lastStartTagName, StringComparison.Ordinal);
 
-    private void StartTag(HtmlTokenKind kind) => _tag = new HtmlToken { Kind = kind, Line = _line };
+    private void StartTag(HtmlTokenKind kind)
+    {
+        _attributeNames.Clear();
+        _tag = new HtmlToken { Kind = kind, Line = _line };
+    }
 
     private void StartAttribute()
     {
@@ -287,11 +328,8 @@ internal sealed class HtmlTokenizer
             return;
 
         string name = _attributeName.ToString();
-        foreach (HtmlAttribute existing in _tag.Attributes)
-        {
-            if (string.Equals(existing.Name, name, StringComparison.Ordinal))
-                return;
-        }
+        if (!_attributeNames.Add(name))
+            return;
 
         _tag.Attributes.Add(new HtmlAttribute(name, _attributeValue.ToString()));
     }
@@ -303,10 +341,13 @@ internal sealed class HtmlTokenizer
         {
             Emit(tag);
             _tag = null;
+            _attributeNames.Clear();
         }
     }
 
     private static bool IsWhitespace(char c) => c is '\t' or '\n' or '\f' or ' ';
+
+    private static char AsciiLower(char c) => c is >= 'A' and <= 'Z' ? (char)(c + 0x20) : c;
 
     private void Step()
     {
@@ -525,6 +566,21 @@ internal sealed class HtmlTokenizer
             case State.CdataSectionEnd:
                 CdataSectionEndState();
                 break;
+            case State.ProcessingInstructionOpen:
+                ProcessingInstructionOpenState();
+                break;
+            case State.ProcessingInstructionTarget:
+                ProcessingInstructionTargetState();
+                break;
+            case State.AfterProcessingInstructionTarget:
+                AfterProcessingInstructionTargetState();
+                break;
+            case State.ProcessingInstructionData:
+                ProcessingInstructionDataState();
+                break;
+            case State.ProcessingInstructionQuestionable:
+                ProcessingInstructionQuestionableState();
+                break;
             case State.CharacterReference:
                 CharacterReferenceState();
                 break;
@@ -653,9 +709,9 @@ internal sealed class HtmlTokenizer
                 _state = State.EndTagOpen;
                 break;
             case '?':
-                _comment = new HtmlToken { Kind = HtmlTokenKind.Comment, Line = _line };
-                Reconsume();
-                _state = State.BogusComment;
+                _temporary.Clear();
+                _processingInstructionLine = _line;
+                _state = State.ProcessingInstructionOpen;
                 break;
             default:
                 if (char.IsAsciiLetter(c))
@@ -728,7 +784,7 @@ internal sealed class HtmlTokenizer
         }
         else
         {
-            _tag?.Name.Append(c == '\0' ? Replacement : char.ToLowerInvariant(c));
+            _tag?.Name.Append(c == '\0' ? Replacement : AsciiLower(c));
         }
     }
 
@@ -790,7 +846,7 @@ internal sealed class HtmlTokenizer
 
             if (char.IsAsciiLetter(c))
             {
-                _tag?.Name.Append(char.ToLowerInvariant(c));
+                _tag?.Name.Append(AsciiLower(c));
                 _temporary.Append(c);
                 return;
             }
@@ -973,7 +1029,7 @@ internal sealed class HtmlTokenizer
 
         if (char.IsAsciiLetter(c))
         {
-            _temporary.Append(char.ToLowerInvariant(c));
+            _temporary.Append(AsciiLower(c));
             EmitCharacter(c);
             return;
         }
@@ -1096,7 +1152,7 @@ internal sealed class HtmlTokenizer
 
         if (char.IsAsciiLetter(c))
         {
-            _temporary.Append(char.ToLowerInvariant(c));
+            _temporary.Append(AsciiLower(c));
             EmitCharacter(c);
             return;
         }
@@ -1159,7 +1215,7 @@ internal sealed class HtmlTokenizer
             return;
         }
 
-        _attributeName.Append(c == '\0' ? Replacement : char.ToLowerInvariant(c));
+        _attributeName.Append(c == '\0' ? Replacement : AsciiLower(c));
     }
 
     private void AfterAttributeNameState()
@@ -1383,12 +1439,16 @@ internal sealed class HtmlTokenizer
 
         if (Matches("[CDATA[", caseInsensitive: false))
         {
-            // Outside foreign content this is a parse error the standard recovers from as a
-            // bogus comment; the importer has no foreign content to put a CDATA section in.
             Advance(7);
+            if (_canStartCdata())
+            {
+                _state = State.CdataSection;
+                return;
+            }
+
             _comment = new HtmlToken { Kind = HtmlTokenKind.Comment, Line = _line };
             _comment.Data.Append("[CDATA[");
-            _state = State.CdataSection;
+            _state = State.BogusComment;
             return;
         }
 
@@ -1616,7 +1676,7 @@ internal sealed class HtmlTokenizer
     {
         if (AtEnd)
         {
-            _doctype = new HtmlToken { Kind = HtmlTokenKind.Doctype, Line = _line, ForceQuirks = true };
+            StartDoctype(forceQuirks: true);
             EmitDoctype();
             EmitEndOfFile();
             return;
@@ -1640,10 +1700,33 @@ internal sealed class HtmlTokenizer
         _state = State.BeforeDoctypeName;
     }
 
+    private HtmlToken StartDoctype(bool forceQuirks = false)
+    {
+        _doctypePublicIdentifier.Clear();
+        _doctypeSystemIdentifier.Clear();
+        _hasDoctypePublicIdentifier = false;
+        _hasDoctypeSystemIdentifier = false;
+
+        var doctype = new HtmlToken
+        {
+            Kind = HtmlTokenKind.Doctype,
+            Line = _line,
+            ForceQuirks = forceQuirks,
+        };
+        _doctype = doctype;
+        return doctype;
+    }
+
     private void EmitDoctype()
     {
         if (_doctype is { } doctype)
         {
+            doctype.PublicIdentifier = _hasDoctypePublicIdentifier
+                ? _doctypePublicIdentifier.ToString()
+                : null;
+            doctype.SystemIdentifier = _hasDoctypeSystemIdentifier
+                ? _doctypeSystemIdentifier.ToString()
+                : null;
             Emit(doctype);
             _doctype = null;
         }
@@ -1653,7 +1736,7 @@ internal sealed class HtmlTokenizer
     {
         if (AtEnd)
         {
-            _doctype = new HtmlToken { Kind = HtmlTokenKind.Doctype, Line = _line, ForceQuirks = true };
+            StartDoctype(forceQuirks: true);
             EmitDoctype();
             EmitEndOfFile();
             return;
@@ -1663,16 +1746,16 @@ internal sealed class HtmlTokenizer
         if (IsWhitespace(c))
             return;
 
-        _doctype = new HtmlToken { Kind = HtmlTokenKind.Doctype, Line = _line };
+        HtmlToken doctype = StartDoctype();
         if (c == '>')
         {
-            _doctype.ForceQuirks = true;
+            doctype.ForceQuirks = true;
             _state = State.Data;
             EmitDoctype();
             return;
         }
 
-        _doctype.Name.Append(c == '\0' ? Replacement : char.ToLowerInvariant(c));
+        doctype.Name.Append(c == '\0' ? Replacement : AsciiLower(c));
         _state = State.DoctypeName;
     }
 
@@ -1702,7 +1785,7 @@ internal sealed class HtmlTokenizer
             return;
         }
 
-        _doctype?.Name.Append(c == '\0' ? Replacement : char.ToLowerInvariant(c));
+        _doctype?.Name.Append(c == '\0' ? Replacement : AsciiLower(c));
     }
 
     private void AfterDoctypeNameState()
@@ -1770,15 +1853,16 @@ internal sealed class HtmlTokenizer
             return;
         }
 
-        SetIdentifier(publicIdentifier, string.Empty);
         switch (c)
         {
             case '"':
+                SetIdentifier(publicIdentifier, string.Empty);
                 _state = publicIdentifier
                     ? State.DoctypePublicIdentifierDoubleQuoted
                     : State.DoctypeSystemIdentifierDoubleQuoted;
                 break;
             case '\'':
+                SetIdentifier(publicIdentifier, string.Empty);
                 _state = publicIdentifier
                     ? State.DoctypePublicIdentifierSingleQuoted
                     : State.DoctypeSystemIdentifierSingleQuoted;
@@ -1802,24 +1886,38 @@ internal sealed class HtmlTokenizer
 
     private void SetIdentifier(bool publicIdentifier, string value)
     {
-        if (_doctype is not { } doctype)
+        if (_doctype is null)
             return;
 
         if (publicIdentifier)
-            doctype.PublicIdentifier = value;
+        {
+            _hasDoctypePublicIdentifier = true;
+            _doctypePublicIdentifier.Clear();
+            _doctypePublicIdentifier.Append(value);
+        }
         else
-            doctype.SystemIdentifier = value;
+        {
+            _hasDoctypeSystemIdentifier = true;
+            _doctypeSystemIdentifier.Clear();
+            _doctypeSystemIdentifier.Append(value);
+        }
     }
 
     private void AppendIdentifier(bool publicIdentifier, char c)
     {
-        if (_doctype is not { } doctype)
+        if (_doctype is null)
             return;
 
         if (publicIdentifier)
-            doctype.PublicIdentifier += c;
+        {
+            _hasDoctypePublicIdentifier = true;
+            _doctypePublicIdentifier.Append(c);
+        }
         else
-            doctype.SystemIdentifier += c;
+        {
+            _hasDoctypeSystemIdentifier = true;
+            _doctypeSystemIdentifier.Append(c);
+        }
     }
 
     private void BeforeDoctypeIdentifierState(bool publicIdentifier)
@@ -2024,7 +2122,6 @@ internal sealed class HtmlTokenizer
     {
         if (AtEnd)
         {
-            EmitComment();
             EmitEndOfFile();
             return;
         }
@@ -2036,19 +2133,26 @@ internal sealed class HtmlTokenizer
             return;
         }
 
-        _comment?.Data.Append(c);
+        EmitCharacter(c);
     }
 
     private void CdataSectionBracketState()
     {
-        if (!AtEnd && Current == ']')
+        if (AtEnd)
+        {
+            EmitCharacter(']');
+            EmitEndOfFile();
+            return;
+        }
+
+        if (Current == ']')
         {
             Consume();
             _state = State.CdataSectionEnd;
             return;
         }
 
-        _comment?.Data.Append(']');
+        EmitCharacter(']');
         _state = State.CdataSection;
     }
 
@@ -2056,7 +2160,8 @@ internal sealed class HtmlTokenizer
     {
         if (AtEnd)
         {
-            _state = State.CdataSection;
+            EmitCharacters("]]");
+            EmitEndOfFile();
             return;
         }
 
@@ -2064,18 +2169,160 @@ internal sealed class HtmlTokenizer
         switch (c)
         {
             case ']':
-                _comment?.Data.Append(']');
+                EmitCharacter(']');
                 break;
             case '>':
                 _state = State.Data;
-                EmitComment();
                 break;
             default:
-                _comment?.Data.Append("]]");
+                EmitCharacters("]]");
                 Reconsume();
                 _state = State.CdataSection;
                 break;
         }
+    }
+
+    private void ProcessingInstructionOpenState()
+    {
+        if (AtEnd)
+        {
+            EmitEndOfFile();
+            return;
+        }
+
+        char c = Consume();
+        if (char.IsAsciiLetter(c) || c == '_')
+        {
+            Reconsume();
+            _state = State.ProcessingInstructionTarget;
+            return;
+        }
+
+        ConvertTemporaryBufferToComment();
+        Reconsume();
+        _state = State.BogusComment;
+    }
+
+    private void ProcessingInstructionTargetState()
+    {
+        if (AtEnd)
+        {
+            EmitEndOfFile();
+            return;
+        }
+
+        char c = Consume();
+        if (IsWhitespace(c) || c is '?' or '>')
+        {
+            string target = _temporary.ToString();
+            if (target.Equals("xml", StringComparison.OrdinalIgnoreCase) ||
+                target.Equals("xml-stylesheet", StringComparison.OrdinalIgnoreCase))
+            {
+                ConvertTemporaryBufferToComment();
+                Reconsume();
+                _state = State.BogusComment;
+                return;
+            }
+
+            _processingInstruction = new HtmlToken
+            {
+                Kind = HtmlTokenKind.ProcessingInstruction,
+                Line = _processingInstructionLine,
+            };
+            _processingInstruction.Name.Append(_temporary);
+            Reconsume();
+            _state = State.AfterProcessingInstructionTarget;
+            return;
+        }
+
+        if (char.IsAsciiLetterOrDigit(c) || c is '-' or '_')
+        {
+            _temporary.Append(c);
+            return;
+        }
+
+        ConvertTemporaryBufferToComment();
+        Reconsume();
+        _state = State.BogusComment;
+    }
+
+    private void AfterProcessingInstructionTargetState()
+    {
+        if (AtEnd)
+        {
+            _processingInstruction = null;
+            EmitEndOfFile();
+            return;
+        }
+
+        char c = Consume();
+        if (IsWhitespace(c))
+            return;
+
+        Reconsume();
+        _state = State.ProcessingInstructionData;
+    }
+
+    private void ProcessingInstructionDataState()
+    {
+        if (AtEnd)
+        {
+            _processingInstruction = null;
+            EmitEndOfFile();
+            return;
+        }
+
+        char c = Consume();
+        switch (c)
+        {
+            case '?':
+                _state = State.ProcessingInstructionQuestionable;
+                break;
+            case '>':
+                _state = State.Data;
+                EmitProcessingInstruction();
+                break;
+            default:
+                _processingInstruction?.Data.Append(c);
+                break;
+        }
+    }
+
+    private void ProcessingInstructionQuestionableState()
+    {
+        if (AtEnd)
+        {
+            _processingInstruction = null;
+            EmitEndOfFile();
+            return;
+        }
+
+        char c = Consume();
+        if (c == '>')
+        {
+            _state = State.Data;
+            EmitProcessingInstruction();
+            return;
+        }
+
+        _processingInstruction?.Data.Append('?');
+        Reconsume();
+        _state = State.ProcessingInstructionData;
+    }
+
+    private void ConvertTemporaryBufferToComment()
+    {
+        _comment = new HtmlToken { Kind = HtmlTokenKind.Comment, Line = _processingInstructionLine };
+        _comment.Data.Append('?').Append(_temporary);
+    }
+
+    private void EmitProcessingInstruction()
+    {
+        if (_processingInstruction is not { } instruction)
+            return;
+
+        Emit(instruction);
+        _processingInstruction = null;
     }
 
     /// <summary>Whether the reference being read is inside an attribute value.</summary>

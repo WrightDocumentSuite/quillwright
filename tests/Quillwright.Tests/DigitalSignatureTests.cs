@@ -1,4 +1,5 @@
 using System.Text;
+using System.Xml.Linq;
 using Quillwright.Model;
 
 namespace Quillwright.Tests;
@@ -176,6 +177,116 @@ public class DigitalSignatureTests
     }
 
     [Fact]
+    public async Task APackageObjectWhoseReferenceDoesNotMatch_IsNotInterpreted()
+    {
+        MemoryStream signed = SignedPackage.Sign(await PackageAsync());
+        MemoryStream tampered = SignedPackage.Rewrite(signed, SignedPackage.Part, ChangeSignatureTime);
+
+        DigitalSignature signature = Assert.Single((await LoadAsync(tampered)).Signatures);
+
+        Assert.Equal(SignatureValueStatus.Verified, signature.ValueStatus);
+        Assert.False(signature.SignedInfoIntact);
+        Assert.Empty(signature.Parts);
+        Assert.Equal(SignatureStatus.Unverified, signature.Status);
+    }
+
+    [Fact]
+    public async Task AnUncheckedPackageObjectReference_IsNotHiddenByALaterValidReference()
+    {
+        MemoryStream signed = SignedPackage.Sign(await PackageAsync());
+        MemoryStream unsupported = SignedPackage.Rewrite(
+            signed, SignedPackage.Part, MakePackageObjectDigestUnsupported);
+
+        DigitalSignature signature = Assert.Single((await LoadAsync(unsupported)).Signatures);
+
+        Assert.Null(signature.SignedInfoIntact);
+        Assert.Empty(signature.Parts);
+        Assert.Equal(SignatureStatus.Unverified, signature.Status);
+    }
+
+    /// <summary>
+    /// A same-document URI must identify exactly one element. Otherwise a verifier can hash one
+    /// object while the package reader interprets another object carrying the same identifier.
+    /// </summary>
+    [Theory]
+    [InlineData("idPackageObject")]
+    [InlineData("idOfficeObject")]
+    public async Task DuplicateSameDocumentIdentifiers_AreRejectedAsAmbiguous(string identifier)
+    {
+        MemoryStream signed = SignedPackage.Sign(await PackageAsync());
+        MemoryStream ambiguous = SignedPackage.Rewrite(
+            signed, SignedPackage.Part, markup => DuplicateObjectInsideKeyInfo(markup, identifier));
+
+        DigitalSignature signature = Assert.Single((await LoadAsync(ambiguous)).Signatures);
+
+        // The SignedInfo bytes themselves were not changed, so their mathematical signature
+        // remains a separate, truthful result. What they reference is structurally ambiguous.
+        Assert.Equal(SignatureValueStatus.Verified, signature.ValueStatus);
+        Assert.False(signature.SignedInfoIntact);
+        Assert.Empty(signature.Parts);
+        Assert.Equal(SignatureStatus.Unverified, signature.Status);
+    }
+
+    [Fact]
+    public async Task SameDocumentIdentifiers_AreComparedCaseSensitively()
+    {
+        MemoryStream signed = SignedPackage.Sign(await PackageAsync());
+        MemoryStream distinct = SignedPackage.Rewrite(
+            signed,
+            SignedPackage.Part,
+            AddCaseDistinctIdentifierInsideKeyInfo);
+
+        DigitalSignature signature = Assert.Single((await LoadAsync(distinct)).Signatures);
+
+        Assert.True(signature.SignedInfoIntact);
+        Assert.Equal(SignatureStatus.PartsUnchanged, signature.Status);
+    }
+
+    [Fact]
+    public async Task ANestedPackageObject_IsNotAcceptedAsTheOpcPackageObject()
+    {
+        MemoryStream signed = SignedPackage.Sign(await PackageAsync());
+        MemoryStream nested = SignedPackage.Rewrite(signed, SignedPackage.Part, MovePackageObjectInsideKeyInfo);
+
+        DigitalSignature signature = Assert.Single((await LoadAsync(nested)).Signatures);
+
+        Assert.Equal(SignatureValueStatus.Verified, signature.ValueStatus);
+        Assert.False(signature.SignedInfoIntact);
+        Assert.Empty(signature.Parts);
+        Assert.Equal(SignatureStatus.Unverified, signature.Status);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public async Task ThePackageObject_MustHaveExactlyOneSignedInfoReference(int referenceCount)
+    {
+        MemoryStream signed = SignedPackage.Sign(await PackageAsync());
+        MemoryStream malformed = SignedPackage.Rewrite(
+            signed, SignedPackage.Part, markup => SetPackageObjectReferenceCount(markup, referenceCount));
+
+        DigitalSignature signature = Assert.Single((await LoadAsync(malformed)).Signatures);
+
+        Assert.False(signature.SignedInfoIntact);
+        Assert.Empty(signature.Parts);
+        Assert.Equal(SignatureStatus.Unverified, signature.Status);
+    }
+
+    [Fact]
+    public async Task ThePackageObject_MustHaveExactlyOneDirectManifest()
+    {
+        MemoryStream signed = SignedPackage.Sign(await PackageAsync());
+        MemoryStream malformed = SignedPackage.Rewrite(signed, SignedPackage.Part, DuplicatePackageManifest);
+
+        DigitalSignature signature = Assert.Single((await LoadAsync(malformed)).Signatures);
+
+        Assert.Equal(SignatureValueStatus.Verified, signature.ValueStatus);
+        Assert.False(signature.SignedInfoIntact);
+        Assert.Empty(signature.Parts);
+        Assert.Equal(SignatureStatus.Unverified, signature.Status);
+    }
+
+    [Fact]
     public async Task AnAlgorithmThisVersionDoesNotPerform_LeavesTheValueUnchecked()
     {
         MemoryStream signed = SignedPackage.Sign(await PackageAsync());
@@ -253,5 +364,96 @@ public class DigitalSignatureTests
             .Replace("encoding=\"UTF-8\"", "encoding=\"UTF-16\"", StringComparison.OrdinalIgnoreCase);
 
         return [.. Encoding.Unicode.GetPreamble(), .. Encoding.Unicode.GetBytes(markup)];
+    }
+
+    private static string DuplicateObjectInsideKeyInfo(
+        string markup, string identifier)
+    {
+        XDocument document = XDocument.Parse(markup, LoadOptions.PreserveWhitespace);
+        XNamespace signature = "http://www.w3.org/2000/09/xmldsig#";
+        XElement root = document.Root!;
+        XElement source = root.Elements(signature + "Object")
+            .Single(element => element.Attribute("Id")?.Value == identifier);
+        var duplicate = new XElement(source);
+
+        root.Element(signature + "KeyInfo")!.AddFirst(duplicate);
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static string ChangeSignatureTime(string markup)
+    {
+        XDocument document = XDocument.Parse(markup, LoadOptions.PreserveWhitespace);
+        XNamespace signature = "http://www.w3.org/2000/09/xmldsig#";
+        XNamespace package = "http://schemas.openxmlformats.org/package/2006/digital-signature";
+        XElement packageObject = document.Root!.Elements(signature + "Object")
+            .Single(static element => element.Attribute("Id")?.Value == "idPackageObject");
+
+        packageObject.Descendants(package + "Value").Single().Value = "2026-01-16T10:30:00Z";
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static string MakePackageObjectDigestUnsupported(string markup)
+    {
+        XDocument document = XDocument.Parse(markup, LoadOptions.PreserveWhitespace);
+        XNamespace signature = "http://www.w3.org/2000/09/xmldsig#";
+        XElement reference = document.Root!.Element(signature + "SignedInfo")!
+            .Elements(signature + "Reference")
+            .Single(static element => element.Attribute("URI")?.Value == "#idPackageObject");
+
+        reference.Element(signature + "DigestMethod")!.SetAttributeValue("Algorithm", "urn:unsupported:digest");
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static string AddCaseDistinctIdentifierInsideKeyInfo(string markup)
+    {
+        XDocument document = XDocument.Parse(markup, LoadOptions.PreserveWhitespace);
+        XNamespace signature = "http://www.w3.org/2000/09/xmldsig#";
+        document.Root!.Element(signature + "KeyInfo")!.AddFirst(
+            new XElement(signature + "Object", new XAttribute("Id", "IDOFFICEOBJECT")));
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static string MovePackageObjectInsideKeyInfo(string markup)
+    {
+        XDocument document = XDocument.Parse(markup, LoadOptions.PreserveWhitespace);
+        XNamespace signature = "http://www.w3.org/2000/09/xmldsig#";
+        XElement root = document.Root!;
+        XElement packageObject = root.Elements(signature + "Object")
+            .Single(static element => element.Attribute("Id")?.Value == "idPackageObject");
+
+        packageObject.Remove();
+        root.Element(signature + "KeyInfo")!.AddFirst(packageObject);
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static string SetPackageObjectReferenceCount(string markup, int count)
+    {
+        XDocument document = XDocument.Parse(markup, LoadOptions.PreserveWhitespace);
+        XNamespace signature = "http://www.w3.org/2000/09/xmldsig#";
+        XElement reference = document.Root!.Element(signature + "SignedInfo")!
+            .Elements(signature + "Reference")
+            .Single(static element => element.Attribute("URI")?.Value == "#idPackageObject");
+
+        if (count == 0)
+            reference.Remove();
+        else if (count == 2)
+            reference.AddAfterSelf(new XElement(reference));
+        else
+            throw new ArgumentOutOfRangeException(nameof(count));
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static string DuplicatePackageManifest(string markup)
+    {
+        XDocument document = XDocument.Parse(markup, LoadOptions.PreserveWhitespace);
+        XNamespace signature = "http://www.w3.org/2000/09/xmldsig#";
+        XElement packageObject = document.Root!.Elements(signature + "Object")
+            .Single(static element => element.Attribute("Id")?.Value == "idPackageObject");
+        XElement manifest = packageObject.Element(signature + "Manifest")!;
+
+        manifest.AddAfterSelf(new XElement(manifest));
+        return document.ToString(SaveOptions.DisableFormatting);
     }
 }

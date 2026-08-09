@@ -12,6 +12,13 @@ internal sealed class SectionWriteContext
 {
     /// <summary>Header and footer references in the order they must be written.</summary>
     public List<(bool IsFooter, HeaderFooterKind Kind, string RelationshipId)> References { get; } = [];
+
+    /// <summary>
+    /// The kind of break which starts the following section.  A section's own
+    /// <see cref="SectionProperties.Start"/> describes how that section starts in the model,
+    /// while OOXML stores the value on the preceding section's <c>w:sectPr</c>.
+    /// </summary>
+    public SectionStart? FollowingSectionStart { get; init; }
 }
 
 /// <summary>Writes section properties (<c>w:sectPr</c>) in the order <c>CT_SectPr</c> declares.</summary>
@@ -42,8 +49,9 @@ internal static class SectionWriter
 
         RawXml.Write(writer, properties.FootnotePropertiesXml);
         RawXml.Write(writer, properties.EndnotePropertiesXml);
-        if (properties.Start != SectionStart.NextPage)
-            WordXml.Value(writer, "type"u8, OoxmlEnums.Name(properties.Start));
+        SectionStart start = context.FollowingSectionStart ?? properties.Start;
+        if (start != SectionStart.NextPage)
+            WordXml.Value(writer, "type"u8, OoxmlEnums.Name(start));
 
         WritePageSize(writer, properties);
         WriteMargins(writer, properties);

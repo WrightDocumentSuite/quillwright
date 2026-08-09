@@ -30,7 +30,24 @@ internal sealed partial class BodyReader
     {
         List<Range> slots = FindTextBoxes(markup);
         if (slots.Count == 0)
-            return ReadChartFrame(markup) ?? (InlineObject)new RawInline(markup);
+        {
+            if (ReadChartFrame(markup) is { } chart)
+                return chart;
+
+            DrawingGeometry primitive = DrawingGeometry.Read(markup);
+            if (!primitive.IsLine)
+                return new RawInline(markup);
+
+            return new Shape([markup], new TextBox())
+            {
+                Width = Primitives.Length.FromEmu(primitive.Width),
+                Height = Primitives.Length.FromEmu(primitive.Height),
+                IsInline = primitive.IsInline || !primitive.IsAnchored,
+                Anchor = primitive.Anchor,
+                Outline = primitive.Outline,
+                IsLine = true,
+            };
+        }
 
         // Two copies that already differ are two different things, and rewriting both from one
         // model would lose whichever was not read.
@@ -52,6 +69,10 @@ internal sealed partial class BodyReader
             Fill = geometry.Fill,
             Outline = geometry.Outline,
             Direction = geometry.TextFlow,
+            InsetLeft = geometry.TextInsetLeft,
+            InsetRight = geometry.TextInsetRight,
+            InsetTop = geometry.TextInsetTop,
+            InsetBottom = geometry.TextInsetBottom,
         };
     }
 

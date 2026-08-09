@@ -227,9 +227,19 @@ public sealed class NumberingDefinitions
     /// <param name="template">Which preset to build.</param>
     public int AddList(ListTemplate template)
     {
+        int definitionId = Definitions.Count == 0 ? 0 : Definitions.Max(static d => d.Id) + 1;
+        int instanceId = Instances.Count == 0 ? 1 : Instances.Max(static i => i.Id) + 1;
+        return AddList(template, definitionId, instanceId).Instance.Id;
+    }
+
+    internal (AbstractNumbering Definition, NumberingInstance Instance) AddList(
+        ListTemplate template,
+        int definitionId,
+        int instanceId)
+    {
         var definition = new AbstractNumbering
         {
-            Id = Definitions.Count == 0 ? 0 : Definitions.Max(static d => d.Id) + 1,
+            Id = definitionId,
             MultiLevelType = template == ListTemplate.Bullet ? "hybridMultilevel" : "multilevel",
         };
 
@@ -239,12 +249,12 @@ public sealed class NumberingDefinitions
         Definitions.Add(definition);
         var instance = new NumberingInstance
         {
-            Id = Instances.Count == 0 ? 1 : Instances.Max(static i => i.Id) + 1,
+            Id = instanceId,
             AbstractId = definition.Id,
         };
 
         Instances.Add(instance);
-        return instance.Id;
+        return (definition, instance);
     }
 
     /// <summary>Returns <see langword="true"/> when nothing is defined and the part can be skipped.</summary>
@@ -252,7 +262,7 @@ public sealed class NumberingDefinitions
         Definitions.Count == 0 && Instances.Count == 0 && PictureBullets.Count == 0 && CleanupXml is null;
 }
 
-/// <summary>The list presets <see cref="NumberingDefinitions.AddList"/> can build.</summary>
+/// <summary>The list presets <see cref="NumberingDefinitions.AddList(ListTemplate)"/> can build.</summary>
 public enum ListTemplate
 {
     /// <summary>Round, hollow and square bullets, cycling by depth.</summary>

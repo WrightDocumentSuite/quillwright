@@ -55,6 +55,27 @@ internal sealed partial class CompoundFileWriter
         _streams.Add((name, content));
     }
 
+    /// <summary>Exact output length for the streams currently registered, without laying out buffers.</summary>
+    public long EstimateBuildLength()
+    {
+        long regularSectors = 0;
+        long miniSectors = 0;
+        foreach ((_, byte[] content) in _streams)
+        {
+            if (content.Length < MiniStreamCutoff)
+                miniSectors += Ceiling(content.Length, MiniSectorSize);
+            else
+                regularSectors += Ceiling(content.Length, SectorSize);
+        }
+
+        long dataSectors = regularSectors +
+                           Ceiling(miniSectors * MiniSectorSize, SectorSize) +
+                           Ceiling(miniSectors, FatEntriesPerSector) +
+                           Ceiling(_streams.Count + 1L, SectorSize / DirectoryEntrySize);
+        (long fat, long difat) = CountFatSectors(dataSectors);
+        return checked(SectorSize * (1 + dataSectors + fat + difat));
+    }
+
     /// <summary>Builds the container.</summary>
     public byte[] Build()
     {
@@ -69,6 +90,24 @@ internal sealed partial class CompoundFileWriter
         layout.WriteDifat(file);
         return file;
     }
+
+    private static (long Fat, long Difat) CountFatSectors(long dataSectors)
+    {
+        long fat = 0;
+        long difat = 0;
+        for (int round = 0; round < 8; round++)
+        {
+            long nextFat = Ceiling(dataSectors + fat + difat, FatEntriesPerSector);
+            long nextDifat = nextFat <= 109 ? 0 : Ceiling(nextFat - 109, FatEntriesPerSector - 1);
+            if (nextFat == fat && nextDifat == difat)
+                break;
+            (fat, difat) = (nextFat, nextDifat);
+        }
+
+        return (fat, difat);
+    }
+
+    private static long Ceiling(long value, long unit) => value <= 0 ? 0 : ((value - 1) / unit) + 1;
 
     private static void WriteHeader(byte[] file, Layout layout)
     {

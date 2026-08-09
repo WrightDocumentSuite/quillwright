@@ -2,9 +2,9 @@
 
 `MarkdownImporter.Import` turns Markdown into a `WordDocument`: CommonMark blocks and
 inlines, and the GitHub extensions — tables, strikethrough and task lists. The
-mapping is the inverse of [the exporter's](markdown-export.md), construct for construct, so a
-document that came from Markdown exports back to the Markdown it was written with — as far as
-the two formats overlap, which is the only claim either direction makes.
+mapping shares a semantic subset with [the exporter](markdown-export.md). Constructs in the
+table below map back to the styles the exporter recognises, but export-only raw-HTML fallbacks
+are not interpreted and this is not a general round-trip guarantee.
 
 ```csharp
 MarkdownImportResult result = MarkdownImporter.Import(File.ReadAllText("report.md"));
@@ -15,6 +15,12 @@ foreach (MarkdownImportWarning warning in result.Diagnostics)
 // Or from a file, with images resolved beside it
 MarkdownImportResult fromFile = await MarkdownImporter.ImportFileAsync("report.md");
 ```
+
+`MarkdownImportOptions.Budget` bounds encoded file bytes, decoded characters and lines,
+block/inline nodes, quote/list/inline nesting, and imported images. The file overload checks bytes
+before decoding, and data URI sizes before base64 allocation. A resource breach throws
+`DocumentLoadLimitException`; syntax approximations remain in `Diagnostics`. The common policy
+and defaults are in [loading-untrusted-input.md](loading-untrusted-input.md).
 
 ## The mapping
 
@@ -34,9 +40,9 @@ MarkdownImportResult fromFile = await MarkdownImporter.ImportFileAsync("report.m
 | `---` thematic break | An empty paragraph ruled along its bottom border |
 | Entities and escapes | The characters they name |
 
-The style names are the ones the exporter recognises, which is what makes the two directions
-inverses: `Heading1` comes back as `#`, `Quote` as `>`, `CodeBlock` as a fence, a monospace
-run as backticks.
+The style names are the ones the exporter recognises, so supported constructs map both ways:
+`Heading1` comes back as `#`, `Quote` as `>`, `CodeBlock` as a fence, and a monospace run as
+backticks.
 
 ## What is approximated, and how it says so
 
@@ -51,6 +57,14 @@ in `MarkdownImportResult.Diagnostics`, each entry with its source line.
   (`ImageSkipped`).
 - **An ordered list starting past 1** keeps Word's own numbering from 1; the start override is
   not carried.
+
+Local image references are percent-decoded once and must be portable relative paths. Rooted
+paths, empty, `.` or `..` segments, malformed escapes, query/fragment syntax and Windows device
+names are not opened. Every existing path component below `MediaDirectory` is checked before
+the file is opened; a symbolic link, junction or other reparse point makes the image
+`ImageSkipped`, even when its target would remain inside the directory. The configured
+`MediaDirectory` itself is the caller's trust boundary and must not be concurrently replaced or
+modified by an attacker. For an attacker-writable media tree, set `ImportImages = false`.
 
 The parser is the library's own, not a dependency: the CommonMark constructs above with the
 delimiter-run emphasis algorithm, reference definitions collected before parsing, and the

@@ -41,14 +41,25 @@ public sealed class StyleResolver
 
     /// <summary>The paragraph formatting in force, including everything inherited.</summary>
     /// <param name="paragraph">The paragraph to resolve.</param>
-    public ParagraphFormat ResolveParagraphFormat(Paragraph paragraph)
+    public ParagraphFormat ResolveParagraphFormat(Paragraph paragraph) =>
+        ResolveParagraphFormatCore(paragraph, numbering: null);
+
+    internal ParagraphFormat ResolveParagraphFormat(Paragraph paragraph, NumberingResolver numbering)
+    {
+        ArgumentNullException.ThrowIfNull(numbering);
+        return ResolveParagraphFormatCore(paragraph, numbering);
+    }
+
+    private ParagraphFormat ResolveParagraphFormatCore(
+        Paragraph paragraph,
+        NumberingResolver? numbering)
     {
         ArgumentNullException.ThrowIfNull(paragraph);
         Refresh();
 
         ParagraphFormat result = _document.Styles.DefaultParagraphFormat;
         result = result.MergeForStyleHierarchy(TableContribution(paragraph).Paragraph);
-        result = result.MergeForStyleHierarchy(NumberingContribution(paragraph).Paragraph);
+        result = result.MergeForStyleHierarchy(NumberingContribution(paragraph, numbering).Paragraph);
         result = result.MergeForStyleHierarchy(ParagraphStyleFormat(paragraph.Format.StyleId));
         return result.MergeForStyleHierarchy(paragraph.Format);
     }
@@ -79,6 +90,76 @@ public sealed class StyleResolver
         result = result.Merge(ParagraphStyleRunFormat(paragraph.Format.StyleId));
         result = result.Merge(CharacterStyleFormat(direct.StyleId));
         return result.Apply(direct);
+    }
+
+    /// <summary>The table formatting in force after its table-style chain and direct format.</summary>
+    public TableFormat ResolveTableFormat(Table table)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        Refresh();
+
+        TableFormat result = TableFormat.Default;
+        foreach (Style style in _document.Styles.Chain(table.Format.StyleId))
+            result = Apply(result, style.TableFormat);
+
+        return Apply(result, table.Format);
+    }
+
+    /// <summary>The row formatting in force after its table style and direct format.</summary>
+    public TableRowFormat ResolveTableRowFormat(TableRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (row.Table is not { } table)
+            return row.Format;
+
+        Refresh();
+        TableFormat tableFormat = ResolveTableFormat(table);
+        TableRowFormat result = TableRowFormat.Default;
+
+        foreach (Style style in _document.Styles.Chain(table.Format.StyleId))
+        {
+            result = Apply(result, style.RowFormat);
+            if (row.Cells.Count == 0)
+                continue;
+
+            foreach (TableStyleRegion region in TableRegions.For(table, row.Cells[0], tableFormat))
+            {
+                if (region is not (TableStyleRegion.Band1Horizontal or TableStyleRegion.Band2Horizontal or
+                    TableStyleRegion.FirstRow or TableStyleRegion.LastRow))
+                    continue;
+
+                ConditionalTableStyle? conditional = style.ConditionalFormats.FirstOrDefault(c => c.Region == region);
+                if (conditional is not null)
+                    result = Apply(result, conditional.RowFormat);
+            }
+        }
+
+        return Apply(result, row.Format);
+    }
+
+    /// <summary>The cell formatting in force after table and conditional styles and direct format.</summary>
+    public TableCellFormat ResolveTableCellFormat(TableCell cell)
+    {
+        ArgumentNullException.ThrowIfNull(cell);
+        if (cell.Row?.Table is not { } table)
+            return cell.Format;
+
+        Refresh();
+        TableFormat tableFormat = ResolveTableFormat(table);
+        TableCellFormat result = TableCellFormat.Default;
+
+        foreach (Style style in _document.Styles.Chain(table.Format.StyleId))
+        {
+            result = Apply(result, style.CellFormat);
+            foreach (TableStyleRegion region in TableRegions.For(table, cell, tableFormat))
+            {
+                ConditionalTableStyle? conditional = style.ConditionalFormats.FirstOrDefault(c => c.Region == region);
+                if (conditional is not null)
+                    result = Apply(result, conditional.CellFormat);
+            }
+        }
+
+        return Apply(result, cell.Format);
     }
 
     /// <summary>
@@ -154,13 +235,17 @@ public sealed class StyleResolver
         return result;
     }
 
-    private (ParagraphFormat Paragraph, RunFormat Run) NumberingContribution(Paragraph paragraph)
+    private (ParagraphFormat Paragraph, RunFormat Run) NumberingContribution(
+        Paragraph paragraph,
+        NumberingResolver? numbering = null)
     {
         (int? numberingId, int level) = NumberingReference(paragraph);
         if (numberingId is not { } id)
             return (ParagraphFormat.Default, RunFormat.Default);
 
-        NumberingLevel? definition = _document.Numbering.ResolveLevel(id, level);
+        NumberingLevel? definition = numbering is null
+            ? _document.Numbering.ResolveLevel(id, level)
+            : numbering.ResolveLevel(id, level);
         return definition is null
             ? (ParagraphFormat.Default, RunFormat.Default)
             : (definition.ParagraphFormat, definition.RunFormat);
@@ -194,12 +279,13 @@ public sealed class StyleResolver
 
         // A table style and the conditional formats inside it are all one layer, so the
         // narrowest statement of a property wins rather than combining with the wider ones.
+        TableFormat tableFormat = ResolveTableFormat(table);
         foreach (Style style in _document.Styles.Chain(table.Format.StyleId))
         {
             paragraphResult = paragraphResult.MergeForStyleHierarchy(style.ParagraphFormat);
             runResult = runResult.Apply(style.RunFormat);
 
-            foreach (TableStyleRegion region in TableRegions.For(table, cell))
+            foreach (TableStyleRegion region in TableRegions.For(table, cell, tableFormat))
             {
                 ConditionalTableStyle? conditional = style.ConditionalFormats.FirstOrDefault(c => c.Region == region);
                 if (conditional is null)
@@ -211,4 +297,68 @@ public sealed class StyleResolver
 
         return (paragraphResult, runResult);
     }
+
+    private static TableFormat Apply(TableFormat current, TableFormat over) => current with
+    {
+        StyleId = over.StyleId ?? current.StyleId,
+        FloatingPositionXml = over.FloatingPositionXml ?? current.FloatingPositionXml,
+        OverlapXml = over.OverlapXml ?? current.OverlapXml,
+        RightToLeft = over.RightToLeft ?? current.RightToLeft,
+        RowBandSize = over.RowBandSize ?? current.RowBandSize,
+        ColumnBandSize = over.ColumnBandSize ?? current.ColumnBandSize,
+        Width = over.Width ?? current.Width,
+        Alignment = over.Alignment ?? current.Alignment,
+        CellSpacing = over.CellSpacing ?? current.CellSpacing,
+        Indent = over.Indent ?? current.Indent,
+        Borders = over.Borders ?? current.Borders,
+        Shading = over.Shading ?? current.Shading,
+        Layout = over.Layout ?? current.Layout,
+        CellMargins = over.CellMargins ?? current.CellMargins,
+        StyleOptions = over.StyleOptions ?? current.StyleOptions,
+        Caption = over.Caption ?? current.Caption,
+        Description = over.Description ?? current.Description,
+        ChangeXml = over.ChangeXml ?? current.ChangeXml,
+        Extensions = over.Extensions ?? current.Extensions,
+    };
+
+    private static TableRowFormat Apply(TableRowFormat current, TableRowFormat over) => current with
+    {
+        ConditionalFormattingXml = over.ConditionalFormattingXml ?? current.ConditionalFormattingXml,
+        DivIdXml = over.DivIdXml ?? current.DivIdXml,
+        GridBefore = over.GridBefore ?? current.GridBefore,
+        GridAfter = over.GridAfter ?? current.GridAfter,
+        WidthBefore = over.WidthBefore ?? current.WidthBefore,
+        WidthAfter = over.WidthAfter ?? current.WidthAfter,
+        CannotSplit = over.CannotSplit ?? current.CannotSplit,
+        Height = over.Height ?? current.Height,
+        HeightRule = over.HeightRule ?? current.HeightRule,
+        IsHeader = over.IsHeader ?? current.IsHeader,
+        CellSpacing = over.CellSpacing ?? current.CellSpacing,
+        Alignment = over.Alignment ?? current.Alignment,
+        Hidden = over.Hidden ?? current.Hidden,
+        InsertedXml = over.InsertedXml ?? current.InsertedXml,
+        DeletedXml = over.DeletedXml ?? current.DeletedXml,
+        ChangeXml = over.ChangeXml ?? current.ChangeXml,
+        Extensions = over.Extensions ?? current.Extensions,
+    };
+
+    private static TableCellFormat Apply(TableCellFormat current, TableCellFormat over) => current with
+    {
+        ConditionalFormattingXml = over.ConditionalFormattingXml ?? current.ConditionalFormattingXml,
+        Width = over.Width ?? current.Width,
+        GridSpan = over.GridSpan ?? current.GridSpan,
+        HorizontalMergeXml = over.HorizontalMergeXml ?? current.HorizontalMergeXml,
+        VerticalMerge = over.VerticalMerge ?? current.VerticalMerge,
+        Borders = over.Borders ?? current.Borders,
+        Shading = over.Shading ?? current.Shading,
+        NoWrap = over.NoWrap ?? current.NoWrap,
+        Margins = over.Margins ?? current.Margins,
+        TextDirection = over.TextDirection ?? current.TextDirection,
+        FitText = over.FitText ?? current.FitText,
+        VerticalAlignment = over.VerticalAlignment ?? current.VerticalAlignment,
+        HideMark = over.HideMark ?? current.HideMark,
+        HeadersXml = over.HeadersXml ?? current.HeadersXml,
+        RevisionXml = over.RevisionXml ?? current.RevisionXml,
+        Extensions = over.Extensions ?? current.Extensions,
+    };
 }

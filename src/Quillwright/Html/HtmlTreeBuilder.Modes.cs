@@ -106,7 +106,12 @@ internal sealed partial class HtmlTreeBuilder
                 InsertComment(token, _document);
                 return;
 
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token, _document);
+                return;
+
             case HtmlTokenKind.Doctype:
+                InsertDocumentType(token);
                 _quirks = token.ForceQuirks || !string.Equals(token.TagName, "html", StringComparison.Ordinal) ||
                           HtmlQuirks.ForcesQuirks(token.PublicIdentifier, token.SystemIdentifier);
                 _mode = Mode.BeforeHtml;
@@ -132,6 +137,10 @@ internal sealed partial class HtmlTreeBuilder
                 InsertComment(token, _document);
                 return;
 
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token, _document);
+                return;
+
             case HtmlTokenKind.Character:
                 TakeLeadingWhitespace(token);
                 if (token.Data.Length == 0)
@@ -141,6 +150,7 @@ internal sealed partial class HtmlTreeBuilder
 
             case HtmlTokenKind.StartTag when token.TagName == "html":
             {
+                _budget?.EnsureMarkupDepth(1);
                 HtmlElement html = CreateFor(token);
                 _document.Append(html);
                 _stack.Add(html);
@@ -155,6 +165,8 @@ internal sealed partial class HtmlTreeBuilder
                 break;
         }
 
+        _budget?.EnsureMarkupDepth(1);
+        _budget?.AddMarkupNode();
         HtmlElement created = new("html") { Line = token.Line };
         _document.Append(created);
         _stack.Add(created);
@@ -175,6 +187,10 @@ internal sealed partial class HtmlTreeBuilder
 
             case HtmlTokenKind.Comment:
                 InsertComment(token);
+                return;
+
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token);
                 return;
 
             case HtmlTokenKind.Doctype:
@@ -217,6 +233,10 @@ internal sealed partial class HtmlTreeBuilder
 
             case HtmlTokenKind.Comment:
                 InsertComment(token);
+                return;
+
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token);
                 return;
 
             case HtmlTokenKind.Doctype:
@@ -341,8 +361,18 @@ internal sealed partial class HtmlTreeBuilder
                 _mode = Mode.InHead;
                 return;
 
-            case HtmlTokenKind.Character when IsAllWhitespace(token.Data.ToString()):
+            case HtmlTokenKind.Character:
+            {
+                string whitespace = TakeLeadingWhitespace(token);
+                InsertText(whitespace);
+                if (token.Data.Length == 0)
+                    return;
+
+                break;
+            }
+
             case HtmlTokenKind.Comment:
+            case HtmlTokenKind.ProcessingInstruction:
                 InHeadMode(token);
                 return;
 
@@ -382,6 +412,10 @@ internal sealed partial class HtmlTreeBuilder
 
             case HtmlTokenKind.Comment:
                 InsertComment(token);
+                return;
+
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token);
                 return;
 
             case HtmlTokenKind.Doctype:
@@ -484,6 +518,10 @@ internal sealed partial class HtmlTreeBuilder
                 InsertComment(token, _stack.Count > 0 ? _stack[0] : _document);
                 return;
 
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token, _stack.Count > 0 ? _stack[0] : _document);
+                return;
+
             case HtmlTokenKind.Doctype:
                 return;
 
@@ -512,6 +550,10 @@ internal sealed partial class HtmlTreeBuilder
         {
             case HtmlTokenKind.Comment:
                 InsertComment(token, _document);
+                return;
+
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token, _document);
                 return;
 
             case HtmlTokenKind.Doctype:
@@ -544,6 +586,10 @@ internal sealed partial class HtmlTreeBuilder
 
             case HtmlTokenKind.Comment:
                 InsertComment(token);
+                return;
+
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token);
                 return;
 
             case HtmlTokenKind.Doctype:
@@ -600,6 +646,10 @@ internal sealed partial class HtmlTreeBuilder
                 InsertComment(token);
                 return;
 
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token);
+                return;
+
             case HtmlTokenKind.StartTag when token.TagName == "html":
                 InBodyMode(token);
                 return;
@@ -627,6 +677,10 @@ internal sealed partial class HtmlTreeBuilder
         {
             case HtmlTokenKind.Comment:
                 InsertComment(token, _document);
+                return;
+
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token, _document);
                 return;
 
             case HtmlTokenKind.Doctype:

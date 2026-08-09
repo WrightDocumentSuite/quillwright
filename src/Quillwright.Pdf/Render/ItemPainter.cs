@@ -1,8 +1,10 @@
 using System.Globalization;
 using Inkwright;
+using Inkwright.Annotations;
 using Inkwright.Content;
 using Inkwright.Cos;
 using Inkwright.Images;
+using Quillwright.Model;
 using Quillwright.Pdf.Layout;
 using Quillwright.Styles;
 
@@ -25,6 +27,7 @@ internal sealed partial class ItemPainter
     private readonly ComposedPage _composed;
     private readonly PageGeometry _geometry;
     private readonly ImageEmbedder _images;
+    private readonly CommentRenderer _comments;
     private readonly Func<PageFieldFragment, string> _resolveField;
     private readonly Action<Inkwright.Annotations.PdfLinkAnnotation, string> _destinations;
     private readonly ITagSink? _tags;
@@ -34,6 +37,7 @@ internal sealed partial class ItemPainter
         PdfPage page,
         ComposedPage composed,
         ImageEmbedder images,
+        CommentRenderer comments,
         Func<PageFieldFragment, string> resolveField,
         Action<Inkwright.Annotations.PdfLinkAnnotation, string> destinations,
         ITagSink? tags)
@@ -43,6 +47,7 @@ internal sealed partial class ItemPainter
         _composed = composed;
         _geometry = composed.Geometry;
         _images = images;
+        _comments = comments;
         _resolveField = resolveField;
         _destinations = destinations;
         _tags = tags;
@@ -167,7 +172,12 @@ internal sealed partial class ItemPainter
             return;
         }
 
-        PaintFragments(item.Line, item.X, item.Y + item.Line.BaselineFromTop, item.Tag);
+        PaintFragments(
+            item.Line,
+            item.X,
+            item.Y + item.Line.BaselineFromTop,
+            item.Tag,
+            item.PaintComments);
     }
 
     /// <summary>
@@ -196,11 +206,16 @@ internal sealed partial class ItemPainter
             _canvas.Transform(PdfMatrix.Rotation(90));
         }
 
-        PaintFragments(line, 0, line.BaselineFromTop, item.Tag);
+        PaintFragments(line, 0, line.BaselineFromTop, item.Tag, item.PaintComments);
         _canvas.Restore();
     }
 
-    private void PaintFragments(LineBox line, double originX, double baseline, TagRef? tag)
+    private void PaintFragments(
+        LineBox line,
+        double originX,
+        double baseline,
+        TagRef? tag,
+        bool paintComments)
     {
         foreach (InlineFragment fragment in line.Fragments)
         {
@@ -208,10 +223,10 @@ internal sealed partial class ItemPainter
             switch (fragment)
             {
                 case TextFragment text:
-                    PaintText(text, x, baseline, line.ExtraSpaceWidth, tag);
+                    PaintText(text, x, baseline, line.ExtraSpaceWidth, text.Tag ?? tag);
                     break;
                 case PageFieldFragment field:
-                    PaintFieldText(field, x, baseline, tag);
+                    PaintFieldText(field, x, baseline, field.Tag ?? tag);
                     break;
                 case TabFragment tab:
                     PaintTab(tab, x, baseline);
@@ -224,6 +239,16 @@ internal sealed partial class ItemPainter
                     break;
                 case ChartFragment chart:
                     PaintChart(chart, x, baseline - chart.Ascent, chart.Tag ?? tag);
+                    break;
+                case CommentFragment comment when paintComments:
+                    _comments.Paint(
+                        _page,
+                        _geometry,
+                        comment.Comment,
+                        x,
+                        baseline - line.Ascent,
+                        tag,
+                        _tags);
                     break;
                 default:
                     break;
@@ -302,22 +327,89 @@ internal sealed partial class ItemPainter
     }
 
     private void PaintLink(LinkItem link)
-    {
-        PdfRectangle bounds = PdfRectangle.FromSize(
-            link.X, _geometry.ToPdfY(link.Y + link.Height), link.Width, link.Height);
+        => PaintLinkGroup([link]);
 
+    /// <summary>
+    /// Emits one annotation per Word hyperlink on this page. A link that wraps has one bounding
+    /// rectangle plus one quadrilateral per visual segment, as ISO 32000 requires, instead of a
+    /// separate annotation and object reference for every line.
+    /// </summary>
+    internal void PaintLinks(IReadOnlyList<LinkItem> links)
+    {
+        var byOwner = new Dictionary<Hyperlink, List<LinkItem>>(ReferenceEqualityComparer.Instance);
+        List<List<LinkItem>> ordered = [];
+
+        foreach (LinkItem link in links)
+        {
+            if (!byOwner.TryGetValue(link.Link, out List<LinkItem>? group))
+            {
+                group = [];
+                byOwner.Add(link.Link, group);
+                ordered.Add(group);
+            }
+
+            group.Add(link);
+        }
+
+        foreach (List<LinkItem> group in ordered)
+            PaintLinkGroup(group);
+    }
+
+    private void PaintLinkGroup(IReadOnlyList<LinkItem> items)
+    {
+        if (items.Count == 0)
+            return;
+
+        LinkItem link = items[0];
+        PdfRectangle bounds = BoundsOf(link);
+        for (int i = 1; i < items.Count; i++)
+            bounds = bounds.Union(BoundsOf(items[i]));
+
+        PdfLinkAnnotation annotation;
         if (!string.IsNullOrEmpty(link.Url))
         {
-            _page.Annotations.AddLink(bounds, link.Url);
+            annotation = _page.Annotations.AddLink(bounds, link.Url);
+            annotation.Contents = link.Url;
+        }
+        else if (!string.IsNullOrEmpty(link.Anchor))
+        {
+            // A link inside the document cannot be pointed anywhere until every page exists, so
+            // it is created now and aimed once the render is over.
+            annotation = _page.Annotations.AddLink(bounds, "#");
+            annotation.Contents = $"Go to {link.Anchor}.";
+            _destinations(annotation, link.Anchor);
+        }
+        else
+        {
             return;
         }
 
-        if (string.IsNullOrEmpty(link.Anchor))
-            return;
+        if (items.Count > 1)
+            annotation.Dictionary.Set(PdfName.Get("QuadPoints"), PdfValue.Array(QuadPoints(items)));
 
-        // A link inside the document cannot be pointed anywhere until every page exists, so it is
-        // created now and aimed once the render is over.
-        _destinations(_page.Annotations.AddLink(bounds, "#"), link.Anchor);
+        _tags?.AddAnnotation(link.Tag, annotation);
+    }
+
+    private PdfRectangle BoundsOf(LinkItem link) => PdfRectangle.FromSize(
+        link.X, _geometry.ToPdfY(link.Y + link.Height), link.Width, link.Height);
+
+    private PdfArray QuadPoints(IReadOnlyList<LinkItem> items)
+    {
+        var points = new PdfArray(items.Count * 8);
+        foreach (LinkItem item in items)
+        {
+            PdfRectangle area = BoundsOf(item);
+            points.Add(PdfValue.Number(area.Left));
+            points.Add(PdfValue.Number(area.Top));
+            points.Add(PdfValue.Number(area.Right));
+            points.Add(PdfValue.Number(area.Top));
+            points.Add(PdfValue.Number(area.Left));
+            points.Add(PdfValue.Number(area.Bottom));
+            points.Add(PdfValue.Number(area.Right));
+            points.Add(PdfValue.Number(area.Bottom));
+        }
+
+        return points;
     }
 
     private int BeginTag(TagRef? tag)
@@ -354,4 +446,7 @@ internal interface ITagSink
     /// <summary>Reserves the next marked-content identifier and attaches it to a structure element.</summary>
     /// <param name="tag">The element the sequence belongs to.</param>
     int Next(TagRef tag);
+
+    /// <summary>Represents a whole annotation object in the logical structure tree.</summary>
+    void AddAnnotation(TagRef? tag, Inkwright.Annotations.PdfAnnotation annotation);
 }

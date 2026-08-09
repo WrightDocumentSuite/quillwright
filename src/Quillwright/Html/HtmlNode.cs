@@ -25,17 +25,38 @@ internal abstract class HtmlNode
     public HtmlElement? Parent { get; internal set; }
 }
 
-/// <summary>An element, its attributes lower-cased by name, its children in order.</summary>
-internal sealed class HtmlElement(string name, HtmlNamespace space = HtmlNamespace.Html) : HtmlNode
+/// <summary>An element, its attributes ASCII-lower-cased by name, its children in order.</summary>
+internal sealed class HtmlElement : HtmlNode
 {
-    /// <summary>The tag name, lower-cased.</summary>
-    public string Name { get; } = name;
+    private readonly List<HtmlAttribute> _attributes = [];
+    private readonly Dictionary<string, string> _attributesByName;
+
+    public HtmlElement(string name, HtmlNamespace space = HtmlNamespace.Html)
+        : this(name, space, StringComparer.Ordinal)
+    {
+    }
+
+    /// <summary>Test seam for counting attribute-name operations without wall-clock assertions.</summary>
+    internal HtmlElement(
+        string name,
+        HtmlNamespace space,
+        IEqualityComparer<string> attributeNameComparer)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(attributeNameComparer);
+        Name = name;
+        Namespace = space;
+        _attributesByName = new Dictionary<string, string>(attributeNameComparer);
+    }
+
+    /// <summary>The tag name, with ASCII uppercase characters lower-cased.</summary>
+    public string Name { get; }
 
     /// <summary>Which namespace the element is in.</summary>
-    public HtmlNamespace Namespace { get; } = space;
+    public HtmlNamespace Namespace { get; }
 
     /// <summary>The attributes, in source order, duplicates already dropped.</summary>
-    public List<HtmlAttribute> Attributes { get; } = [];
+    public IReadOnlyList<HtmlAttribute> Attributes => _attributes;
 
     /// <summary>The children, in order.</summary>
     public List<HtmlNode> Children { get; } = [];
@@ -63,15 +84,24 @@ internal sealed class HtmlElement(string name, HtmlNamespace space = HtmlNamespa
 
     /// <summary>The value of an attribute, or <see langword="null"/> when it has none.</summary>
     /// <param name="name">The attribute name, lower-case.</param>
-    public string? Attribute(string name)
-    {
-        foreach (HtmlAttribute candidate in Attributes)
-        {
-            if (string.Equals(candidate.Name, name, StringComparison.Ordinal))
-                return candidate.Value;
-        }
+    public string? Attribute(string name) =>
+        _attributesByName.GetValueOrDefault(name);
 
-        return null;
+    /// <summary>Adds an attribute unless its exact name is already present.</summary>
+    internal bool AddAttribute(HtmlAttribute attribute)
+    {
+        if (!_attributesByName.TryAdd(attribute.Name, attribute.Value))
+            return false;
+
+        _attributes.Add(attribute);
+        return true;
+    }
+
+    /// <summary>Adds attributes in order, keeping the first value for every exact name.</summary>
+    internal void AddAttributes(IEnumerable<HtmlAttribute> attributes)
+    {
+        foreach (HtmlAttribute attribute in attributes)
+            AddAttribute(attribute);
     }
 
     /// <summary>Appends a node, detaching it from wherever it was.</summary>
@@ -144,4 +174,27 @@ internal sealed class HtmlComment(string data) : HtmlNode
 {
     /// <summary>The comment's data.</summary>
     public string Data { get; } = data;
+}
+
+/// <summary>A processing instruction retained in the parsed tree.</summary>
+internal sealed class HtmlProcessingInstruction(string target, string data) : HtmlNode
+{
+    /// <summary>The processing instruction target, preserving source case.</summary>
+    public string Target { get; } = target;
+
+    /// <summary>The processing instruction data.</summary>
+    public string Data { get; } = data;
+}
+
+/// <summary>The document type declaration retained as a child of the document node.</summary>
+internal sealed class HtmlDocumentType(string name, string publicIdentifier, string systemIdentifier) : HtmlNode
+{
+    /// <summary>The doctype name.</summary>
+    public string Name { get; } = name;
+
+    /// <summary>The public identifier, or the empty string when it was missing.</summary>
+    public string PublicIdentifier { get; } = publicIdentifier;
+
+    /// <summary>The system identifier, or the empty string when it was missing.</summary>
+    public string SystemIdentifier { get; } = systemIdentifier;
 }

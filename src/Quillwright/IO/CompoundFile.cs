@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Quillwright.Diagnostics;
 
 namespace Quillwright.IO;
 
@@ -43,13 +44,28 @@ internal sealed class CompoundFile
     private readonly List<DirectoryEntry> _directory = [];
     private readonly Dictionary<string, DirectoryEntry> _byPath = new(StringComparer.OrdinalIgnoreCase);
     private readonly byte[] _miniStream;
+    private readonly DocumentLoadBudget _budget;
 
-    private CompoundFile(byte[] data)
+    private CompoundFile(byte[] data, DocumentLoadBudget budget)
     {
         _data = data;
-        _isVersion3 = BinaryPrimitives.ReadUInt16LittleEndian(Span(26, 2)) <= 3;
-        _sectorSize = 1 << BinaryPrimitives.ReadUInt16LittleEndian(Span(30, 2));
-        _miniSectorSize = 1 << BinaryPrimitives.ReadUInt16LittleEndian(Span(32, 2));
+        _budget = budget;
+        ushort version = BinaryPrimitives.ReadUInt16LittleEndian(Span(26, 2));
+        ushort byteOrder = BinaryPrimitives.ReadUInt16LittleEndian(Span(28, 2));
+        ushort sectorShift = BinaryPrimitives.ReadUInt16LittleEndian(Span(30, 2));
+        ushort miniSectorShift = BinaryPrimitives.ReadUInt16LittleEndian(Span(32, 2));
+        if (version is not (3 or 4) || byteOrder != 0xFFFE ||
+            (version == 3 && sectorShift != 9) || (version == 4 && sectorShift != 12) ||
+            miniSectorShift != 6)
+        {
+            throw new CompoundFileException("The compound file header has an unsupported version or sector layout.");
+        }
+
+        _isVersion3 = version == 3;
+        _sectorSize = 1 << sectorShift;
+        _miniSectorSize = 1 << miniSectorShift;
+        if (_data.Length < _sectorSize)
+            throw new CompoundFileException("The compound file is shorter than its header sector.");
 
         // The cutoff is required to be 4096, but it is a field of the header rather than a
         // constant of the format, so it is read rather than assumed.
@@ -59,6 +75,7 @@ internal sealed class CompoundFile
         _fat = ReadFat();
         _miniFat = ReadChainValues(BinaryPrimitives.ReadUInt32LittleEndian(Span(60, 4)));
         ReadDirectory(BinaryPrimitives.ReadUInt32LittleEndian(Span(48, 4)));
+        ValidateDirectory();
 
         // The mini stream is an ordinary stream owned by the root entry, allocated from the
         // main table whatever its size.
@@ -74,14 +91,19 @@ internal sealed class CompoundFile
 
     /// <summary>Opens a container from bytes.</summary>
     /// <param name="data">The whole file.</param>
+    /// <param name="budget">Optional limits for the container directory and streams.</param>
     /// <exception cref="CompoundFileException">The bytes are not a compound file.</exception>
-    public static CompoundFile Open(byte[] data)
+    public static CompoundFile Open(byte[] data, DocumentLoadBudget? budget = null)
     {
         ArgumentNullException.ThrowIfNull(data);
+        DocumentLoadBudget limits = budget ?? DocumentLoadBudget.Default;
+        limits.Validate();
+        DocumentLoadBudgetState.Ensure(
+            nameof(DocumentLoadBudget.MaxInputBytes), limits.MaxInputBytes, data.LongLength);
         if (!IsCompoundFile(data))
             throw new CompoundFileException("The bytes do not begin with a compound file signature.");
 
-        return new CompoundFile(data);
+        return new CompoundFile(data, limits);
     }
 
     /// <summary>Whether bytes look like a compound file.</summary>
@@ -161,15 +183,22 @@ internal sealed class CompoundFile
 
     private uint[] ReadFat()
     {
-        int fatSectorCount = (int)BinaryPrimitives.ReadUInt32LittleEndian(Span(44, 4));
+        uint fatSectorCount = BinaryPrimitives.ReadUInt32LittleEndian(Span(44, 4));
         var sectors = new List<uint>();
-        for (int i = 0; i < Math.Min(109, fatSectorCount); i++)
-            sectors.Add(BinaryPrimitives.ReadUInt32LittleEndian(Span(76 + (i * 4), 4)));
+        var seenFatSectors = new HashSet<uint>();
+        int headerSectors = (int)Math.Min(109u, fatSectorCount);
+        for (int i = 0; i < headerSectors; i++)
+            AddFatSector(BinaryPrimitives.ReadUInt32LittleEndian(Span(76 + (i * 4), 4)));
 
         // Beyond 109 sectors the table continues through the difat chain.
         uint difat = BinaryPrimitives.ReadUInt32LittleEndian(Span(68, 4));
-        int guard = 0;
-        while (difat is not (EndOfChain or FreeSector) && guard++ < 1 << 20)
+        uint difatSectorCount = BinaryPrimitives.ReadUInt32LittleEndian(Span(72, 4));
+        var seenDifatSectors = new HashSet<uint>();
+        uint visitedDifatSectors = 0;
+        while (difat is not (EndOfChain or FreeSector) &&
+               visitedDifatSectors++ < difatSectorCount &&
+               seenDifatSectors.Add(difat) &&
+               sectors.Count < fatSectorCount)
         {
             int offset = SectorOffset(difat);
             if (offset + _sectorSize > _data.Length)
@@ -179,14 +208,15 @@ internal sealed class CompoundFile
             for (int i = 0; i < entries; i++)
             {
                 uint sector = BinaryPrimitives.ReadUInt32LittleEndian(Span(offset + (i * 4), 4));
-                if (sector is not FreeSector)
-                    sectors.Add(sector);
+                AddFatSector(sector);
+                if (sectors.Count >= fatSectorCount)
+                    break;
             }
 
             difat = BinaryPrimitives.ReadUInt32LittleEndian(Span(offset + (entries * 4), 4));
         }
 
-        var fat = new List<uint>(sectors.Count * (_sectorSize / 4));
+        var fat = new List<uint>();
         foreach (uint sector in sectors)
         {
             int offset = SectorOffset(sector);
@@ -197,6 +227,13 @@ internal sealed class CompoundFile
         }
 
         return [.. fat];
+
+        void AddFatSector(uint sector)
+        {
+            int offset = SectorOffset(sector);
+            if (offset >= 0 && offset + _sectorSize <= _data.Length && seenFatSectors.Add(sector))
+                sectors.Add(sector);
+        }
     }
 
     private uint[] ReadChainValues(uint start)
@@ -224,6 +261,10 @@ internal sealed class CompoundFile
 
             for (int i = 0; i + DirectoryEntrySize <= _sectorSize; i += DirectoryEntrySize)
             {
+                DocumentLoadBudgetState.Ensure(
+                    nameof(DocumentLoadBudget.MaxPackageParts),
+                    _budget.MaxPackageParts,
+                    _directory.Count + 1L);
                 ReadOnlySpan<byte> raw = Span(offset + i, DirectoryEntrySize);
                 int nameLength = BinaryPrimitives.ReadUInt16LittleEndian(raw[64..]);
                 if (nameLength is < 2 or > 64)
@@ -241,6 +282,27 @@ internal sealed class CompoundFile
                     BinaryPrimitives.ReadUInt32LittleEndian(raw[116..]),
                     StreamSize(raw[120..])));
             }
+        }
+    }
+
+    private void ValidateDirectory()
+    {
+        DocumentLoadBudgetState.Ensure(
+            nameof(DocumentLoadBudget.MaxPackageParts), _budget.MaxPackageParts, _directory.Count);
+
+        long total = 0;
+        for (int index = 0; index < _directory.Count; index++)
+        {
+            DirectoryEntry entry = _directory[index];
+            if (!entry.IsStream && index != 0)
+                continue;
+
+            long size = entry.Size > long.MaxValue ? long.MaxValue : (long)entry.Size;
+            DocumentLoadBudgetState.Ensure(
+                nameof(DocumentLoadBudget.MaxPartBytes), _budget.MaxPartBytes, size);
+            total = size > long.MaxValue - total ? long.MaxValue : total + size;
+            DocumentLoadBudgetState.Ensure(
+                nameof(DocumentLoadBudget.MaxInflatedBytes), _budget.MaxInflatedBytes, total);
         }
     }
 
@@ -298,8 +360,10 @@ internal sealed class CompoundFile
     private static IEnumerable<uint> Chain(uint start, uint[] table)
     {
         uint current = start;
-        int guard = 0;
-        while (current < table.Length && current is not (EndOfChain or FreeSector) && guard++ <= table.Length)
+        var visited = new HashSet<uint>();
+        while (current < table.Length &&
+               current is not (EndOfChain or FreeSector) &&
+               visited.Add(current))
         {
             yield return current;
             current = table[current];

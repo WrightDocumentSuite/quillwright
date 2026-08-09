@@ -126,6 +126,65 @@ public class CommentThreadTests
         Assert.True((await ReloadAsync(document)).Comments.Single().IsResolved);
     }
 
+    /// <summary>
+    /// The loaded package still has a threading part after its last resolved flag is cleared.
+    /// That part has to be regenerated with <c>done="0"</c>, rather than copied back with the
+    /// old value.
+    /// </summary>
+    [Fact]
+    public async Task ClearingTheOnlyResolvedState_RewritesTheExistingThreadPart()
+    {
+        WordDocument document = WordDocument.Create();
+        var paragraph = new Paragraph("Reviewed text");
+        document.Sections[0].Blocks.Add(paragraph);
+        document.AddComment(paragraph, 0, 8, "done with this", "Ada").IsResolved = true;
+
+        WordDocument reopened = await ReloadAsync(document);
+        reopened.Comments.Single().IsResolved = false;
+
+        MemoryStream saved = await SaveAsync(reopened);
+        string part = OpenXmlAssert.ReadPart(saved, "commentsExtended.xml");
+
+        Assert.Contains("w15:done=\"0\"", part, StringComparison.Ordinal);
+        Assert.DoesNotContain("w15:done=\"1\"", part, StringComparison.Ordinal);
+        AssertThreadPartWiring(saved);
+
+        saved.Position = 0;
+        WordDocument again = await WordDocument.LoadAsync(
+            saved, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False(again.Comments.Single().IsResolved);
+    }
+
+    /// <summary>
+    /// Clearing the last parent link is the other transition that makes
+    /// <see cref="Formats.CommentThreadWriter.HasThreads"/> false. The existing part must
+    /// still be rewritten so the removed link cannot return on reload.
+    /// </summary>
+    [Fact]
+    public async Task ClearingTheLastReplyLink_RewritesTheExistingThreadPart()
+    {
+        WordDocument document = WordDocument.Create();
+        var paragraph = new Paragraph("Reviewed text here");
+        document.Sections[0].Blocks.Add(paragraph);
+        Comment question = document.AddComment(paragraph, 0, 8, "a question", "Ada");
+        document.AddReply(question, "an answer", "Grace");
+
+        WordDocument reopened = await ReloadAsync(document);
+        reopened.Comments[1].ParentId = null;
+
+        MemoryStream saved = await SaveAsync(reopened);
+        string part = OpenXmlAssert.ReadPart(saved, "commentsExtended.xml");
+
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(part, "<w15:commentEx ").Count);
+        Assert.DoesNotContain("w15:paraIdParent", part, StringComparison.Ordinal);
+        AssertThreadPartWiring(saved);
+
+        saved.Position = 0;
+        WordDocument again = await WordDocument.LoadAsync(
+            saved, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.All(again.Comments, static comment => Assert.Null(comment.ParentId));
+    }
+
     [Fact]
     public async Task ADocumentWithNoThreads_DoesNotGetTheExtraPart()
     {
@@ -196,11 +255,45 @@ public class CommentThreadTests
         return [.. archive.Entries.Select(static entry => entry.FullName)];
     }
 
-    private static async Task<WordDocument> ReloadAsync(WordDocument document)
+    /// <summary>
+    /// Comments are not reliably visible in headless rendering, so the part itself and the
+    /// two pieces of OPC wiring that make it reachable are asserted directly.
+    /// </summary>
+    private static void AssertThreadPartWiring(MemoryStream package)
+    {
+        byte[] bytes = package.ToArray();
+        Assert.Contains("word/commentsExtended.xml", Names(bytes));
+        Assert.Contains(
+            Formats.DocxSchema.RelCommentsExtended,
+            Entry(bytes, "word/_rels/document.xml.rels"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            Formats.DocxSchema.ContentTypeCommentsExtended,
+            Entry(bytes, "[Content_Types].xml"),
+            StringComparison.Ordinal);
+    }
+
+    private static string Entry(byte[] package, string name)
+    {
+        using var archive = new System.IO.Compression.ZipArchive(
+            new MemoryStream(package), System.IO.Compression.ZipArchiveMode.Read);
+        System.IO.Compression.ZipArchiveEntry? entry = archive.GetEntry(name);
+        Assert.NotNull(entry);
+        using var reader = new StreamReader(entry.Open());
+        return reader.ReadToEnd();
+    }
+
+    private static async Task<MemoryStream> SaveAsync(WordDocument document)
     {
         var buffer = new MemoryStream();
         await document.SaveAsync(buffer, cancellationToken: TestContext.Current.CancellationToken);
         OpenXmlAssert.Valid(buffer, "comment threads");
+        return buffer;
+    }
+
+    private static async Task<WordDocument> ReloadAsync(WordDocument document)
+    {
+        MemoryStream buffer = await SaveAsync(document);
         buffer.Position = 0;
         return await WordDocument.LoadAsync(buffer, cancellationToken: TestContext.Current.CancellationToken);
     }

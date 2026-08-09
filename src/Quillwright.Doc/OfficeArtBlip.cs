@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
+using Quillwright.Diagnostics;
 using Quillwright.Model;
 
 namespace Quillwright.Doc;
@@ -40,22 +41,27 @@ internal static class OfficeArtBlip
     /// <param name="data">The stream the entry was read from.</param>
     /// <param name="entry">The entry, either a store record or an image record.</param>
     /// <param name="delayed">The delay stream, when the file has one.</param>
-    public static ImageData? Resolve(byte[] data, OfficeArtRecord entry, byte[]? delayed)
+    /// <param name="loadBudget">Optional counters for decoded image payloads.</param>
+    public static ImageData? Resolve(
+        byte[] data,
+        OfficeArtRecord entry,
+        byte[]? delayed,
+        DocumentLoadBudgetState? loadBudget = null)
     {
         if (entry.Type != EntryType)
-            return IsImage(entry.Type) ? Read(data, entry) : null;
+            return IsImage(entry.Type) ? Read(data, entry, loadBudget) : null;
 
         if (entry.Body + EntryHeaderBytes > entry.End)
             return null;
 
         int embedded = entry.Body + EntryHeaderBytes + data[entry.Body + 33];
         if (embedded < entry.End && OfficeArtRecord.TryRead(data, embedded, entry.End, out OfficeArtRecord carried))
-            return Read(data, carried);
+            return Read(data, carried, loadBudget);
 
         uint offset = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(entry.Body + 28));
         return delayed is not null && offset != 0xFFFFFFFF &&
                OfficeArtRecord.TryRead(delayed, (int)offset, delayed.Length, out OfficeArtRecord late)
-            ? Read(delayed, late)
+            ? Read(delayed, late, loadBudget)
             : null;
     }
 
@@ -64,18 +70,24 @@ internal static class OfficeArtBlip
     /// <param name="start">Offset of the first header.</param>
     /// <param name="end">Offset to stop at.</param>
     /// <param name="delayed">The delay stream, when the file has one.</param>
-    public static ImageData? FindFirst(byte[] data, int start, int end, byte[]? delayed)
+    /// <param name="loadBudget">Optional counters for decoded image payloads.</param>
+    public static ImageData? FindFirst(
+        byte[] data,
+        int start,
+        int end,
+        byte[]? delayed,
+        DocumentLoadBudgetState? loadBudget = null)
     {
         foreach (OfficeArtRecord record in OfficeArtRecord.Walk(data, start, end))
         {
             if (record.IsContainer)
             {
-                if (FindFirst(data, record.Body, record.End, delayed) is { } nested)
+                if (FindFirst(data, record.Body, record.End, delayed, loadBudget) is { } nested)
                     return nested;
                 continue;
             }
 
-            if (IsEntry(record.Type) && Resolve(data, record, delayed) is { } image)
+            if (IsEntry(record.Type) && Resolve(data, record, delayed, loadBudget) is { } image)
                 return image;
         }
 
@@ -85,29 +97,36 @@ internal static class OfficeArtBlip
     /// <summary>Reads one image record, or returns <see langword="null"/> for a format not carried across.</summary>
     /// <param name="data">The stream the record was read from.</param>
     /// <param name="image">The record.</param>
-    public static ImageData? Read(byte[] data, OfficeArtRecord image)
+    /// <param name="loadBudget">Optional counters for decoded image payloads.</param>
+    public static ImageData? Read(
+        byte[] data, OfficeArtRecord image, DocumentLoadBudgetState? loadBudget = null)
     {
         if (Format(image.Type) is not { } format)
             return null;
 
         (string extension, bool metafile) = format;
         int after = image.Body + IdentityBytes + (HasSecondIdentity(image.Type, image.Instance) ? IdentityBytes : 0);
-        return metafile ? Metafile(data, image, after, extension) : Raster(data, image, after + 1, extension);
+        return metafile
+            ? Metafile(data, image, after, extension, loadBudget)
+            : Raster(data, image, after + 1, extension, loadBudget);
     }
 
     /// <summary>A bitmap, which follows its digests and a one-byte tag with nothing in between.</summary>
-    private static ImageData? Raster(byte[] data, OfficeArtRecord image, int start, string extension)
+    private static ImageData? Raster(
+        byte[] data, OfficeArtRecord image, int start, string extension, DocumentLoadBudgetState? loadBudget)
     {
         int count = image.End - start;
         if (start < 0 || count <= 0 || start + count > data.Length)
             return null;
 
+        loadBudget?.AddMedia(extension == "dib" ? checked(count + 14L) : count);
         byte[] bytes = data.AsSpan(start, count).ToArray();
         return extension == "dib" ? Bitmap(bytes) : ImageData.FromBytes(bytes, ImageData.ContentTypeForExtension(extension));
     }
 
     /// <summary>A metafile, which is deflated unless its header says otherwise.</summary>
-    private static ImageData? Metafile(byte[] data, OfficeArtRecord image, int start, string extension)
+    private static ImageData? Metafile(
+        byte[] data, OfficeArtRecord image, int start, string extension, DocumentLoadBudgetState? loadBudget)
     {
         if (start < 0 || start + MetafileHeaderBytes > image.End || image.End > data.Length)
             return null;
@@ -122,19 +141,59 @@ internal static class OfficeArtBlip
         if (count <= 0)
             return null;
 
-        byte[] bytes = deflated ? Inflate(data, from, count, original) : data.AsSpan(from, count).ToArray();
+        byte[] bytes;
+        if (deflated)
+        {
+            bytes = Inflate(data, from, count, original, loadBudget);
+        }
+        else
+        {
+            loadBudget?.AddMedia(count);
+            bytes = data.AsSpan(from, count).ToArray();
+        }
         return bytes.Length == 0 ? null : ImageData.FromBytes(bytes, ImageData.ContentTypeForExtension(extension));
     }
 
     /// <summary>Expands a deflated metafile, giving up rather than throwing on damaged bytes.</summary>
-    private static byte[] Inflate(byte[] data, int start, int count, int original)
+    private static byte[] Inflate(
+        byte[] data, int start, int count, int original, DocumentLoadBudgetState? loadBudget)
     {
         try
         {
             using var source = new MemoryStream(data, start, count, writable: false);
             using var expanding = new ZLibStream(source, CompressionMode.Decompress);
-            using var result = new MemoryStream(original is > 0 and <= 64 * 1024 * 1024 ? original : count);
-            expanding.CopyTo(result);
+            long maximum = loadBudget?.MaximumNextMediaBytes ?? 64L * 1024 * 1024;
+            if (maximum < 1)
+                loadBudget!.EnsureMedia(1);
+
+            if (original > 0)
+            {
+                if (loadBudget is null)
+                    DocumentLoadBudgetState.Ensure(nameof(DocumentLoadBudget.MaxMediaBytes), maximum, original);
+                else
+                    loadBudget.EnsureMedia(original);
+            }
+
+            int initialCapacity = original is > 0 && original <= maximum
+                ? original
+                : Math.Min(count, 81920);
+            using var result = new MemoryStream(initialCapacity);
+            byte[] buffer = new byte[81920];
+            long total = 0;
+            while (true)
+            {
+                int read = expanding.Read(buffer);
+                if (read == 0)
+                    break;
+                total = checked(total + read);
+                if (loadBudget is null)
+                    DocumentLoadBudgetState.Ensure(nameof(DocumentLoadBudget.MaxMediaBytes), maximum, total);
+                else
+                    loadBudget.EnsureMedia(total);
+                result.Write(buffer, 0, read);
+            }
+
+            loadBudget?.AddMedia(total);
             return result.ToArray();
         }
         catch (InvalidDataException)

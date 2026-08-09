@@ -17,6 +17,9 @@ internal enum HtmlTokenKind : byte
     /// <summary>A comment.</summary>
     Comment,
 
+    /// <summary>A processing instruction.</summary>
+    ProcessingInstruction,
+
     /// <summary>A doctype.</summary>
     Doctype,
 
@@ -30,10 +33,10 @@ internal sealed class HtmlToken
     /// <summary>What this token is.</summary>
     public HtmlTokenKind Kind { get; set; }
 
-    /// <summary>The tag or doctype name, lower-cased for a tag.</summary>
+    /// <summary>The tag/doctype name or processing-instruction target, ASCII-folded where required.</summary>
     public StringBuilder Name { get; } = new();
 
-    /// <summary>The characters of a character or comment token.</summary>
+    /// <summary>The characters of a character, comment, or processing-instruction token.</summary>
     public StringBuilder Data { get; } = new();
 
     /// <summary>The attributes of a start tag, in source order, duplicates already dropped.</summary>
@@ -91,9 +94,12 @@ internal sealed class HtmlToken
 
     /// <summary>The tag name as a string.</summary>
     public string TagName => Name.ToString();
+
+    /// <summary>The processing instruction target as a string.</summary>
+    public string ProcessingInstructionTarget => Name.ToString();
 }
 
 /// <summary>One attribute of a start tag.</summary>
-/// <param name="Name">The name, lower-cased.</param>
+/// <param name="Name">The name, with ASCII uppercase characters lower-cased.</param>
 /// <param name="Value">The value, character references already expanded.</param>
 internal readonly record struct HtmlAttribute(string Name, string Value);

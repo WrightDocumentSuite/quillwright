@@ -1,4 +1,6 @@
 using Inkwright;
+using Inkwright.Annotations;
+using Inkwright.Cos;
 using Inkwright.Layout;
 using Inkwright.Tagging;
 using Quillwright.Model;
@@ -232,5 +234,65 @@ public sealed class TaggingTests
         IEnumerable<PdfUaProblem> violations = PdfUaProfile.Violations(problems);
 
         Assert.Empty(violations);
+    }
+
+    [Fact]
+    public void ATaggedLinkOwnsItsTextAndAnnotationAndPassesUaValidation()
+    {
+        WordDocument document = WordDocument.Create();
+        document.Properties.Title = "Accessible link";
+        Paragraph paragraph = document.Sections[0].AddParagraph("Visit the site");
+        paragraph.AddRange(new Hyperlink { Url = "https://example.org/" }, 6, 8);
+
+        using Rendered rendered = Rendered.Of(
+            document,
+            Tagged,
+            pdf => PdfUaProfile.Declare(pdf, PdfUaConformance.Ua1, "Accessible link"));
+
+        PdfStructureNode link = Descendants(rendered.Document.Structure).Single(node => node.Tag == "Link");
+        Assert.NotEmpty(link.Content);
+        Assert.Equal(
+            Assert.Single(rendered.Document.Pages[0].Annotations).Id,
+            Assert.Single(link.Objects).Object);
+        Assert.Empty(PdfUaProfile.Violations(
+            PdfUaProfile.Validate(rendered.Document, PdfUaConformance.Ua1)));
+    }
+
+    [Fact]
+    public void AWrappedTaggedLinkUsesOneAnnotationWithQuadPoints()
+    {
+        WordDocument document = WordDocument.Create();
+        document.Properties.Title = "Accessible wrapped link";
+        string text = string.Join(' ', Enumerable.Repeat(
+            "A long linked phrase continues across the available line width", 5));
+        Paragraph paragraph = document.Sections[0].AddParagraph(text);
+        paragraph.AddRange(new Hyperlink { Url = "https://example.org/wrapped" }, 0, paragraph.TextLength);
+
+        using Rendered rendered = Rendered.Of(
+            document,
+            Tagged,
+            pdf => PdfUaProfile.Declare(pdf, PdfUaConformance.Ua1, "Accessible wrapped link"));
+
+        Assert.True(rendered.Lines().Count > 1);
+        PdfAnnotation annotation = Assert.Single(rendered.Document.Pages[0].Annotations);
+        PdfArray quadrilaterals = Assert.IsType<PdfArray>(
+            annotation.Dictionary.GetArray(PdfName.Get("QuadPoints")));
+        Assert.True(quadrilaterals.Count >= 16);
+
+        PdfStructureNode link = Descendants(rendered.Document.Structure).Single(node => node.Tag == "Link");
+        Assert.True(link.Content.Count > 1);
+        Assert.Equal(annotation.Id, Assert.Single(link.Objects).Object);
+        Assert.Empty(PdfUaProfile.Violations(
+            PdfUaProfile.Validate(rendered.Document, PdfUaConformance.Ua1)));
+    }
+
+    private static IEnumerable<PdfStructureNode> Descendants(IReadOnlyList<PdfStructureNode> nodes)
+    {
+        foreach (PdfStructureNode node in nodes)
+        {
+            yield return node;
+            foreach (PdfStructureNode child in Descendants(node.Children))
+                yield return child;
+        }
     }
 }

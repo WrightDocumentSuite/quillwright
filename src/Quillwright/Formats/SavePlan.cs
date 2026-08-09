@@ -57,6 +57,9 @@ internal sealed class SavePlan
     /// <summary>Whether the durable comment identifiers part is written.</summary>
     public bool WritesCommentIds { get; private set; }
 
+    /// <summary>Whether the comment threading and resolved-state part is written.</summary>
+    public bool WritesCommentThreads { get; private set; }
+
     /// <summary>Whether the extended comment metadata part is written.</summary>
     public bool WritesCommentsExtensible { get; private set; }
 
@@ -94,7 +97,12 @@ internal sealed class SavePlan
             PlanFixedPart(DocxSchema.RelEndnotes, DocxSchema.PartEndnotes);
         if (Writes(DocxSchema.RelComments, DocxSchema.PartComments, _document.Comments.Count > 0))
             PlanFixedPart(DocxSchema.RelComments, DocxSchema.PartComments);
-        if (CommentThreadWriter.HasThreads(_document))
+        // Once a package carries commentsExtended.xml it remains part of the model-owned
+        // comment state. Rebuild it even after the last reply link or resolved flag is
+        // cleared; otherwise the preserved raw part would put that stale state back.
+        WritesCommentThreads = CommentThreadWriter.HasThreads(_document) ||
+            MainRelationships.Any(static r => r.Is(DocxSchema.RelCommentsExtended));
+        if (WritesCommentThreads)
             PlanFixedPart(DocxSchema.RelCommentsExtended, DocxSchema.PartCommentsExtended);
 
         // The extended metadata names comments by durable identifier, so asking for it is

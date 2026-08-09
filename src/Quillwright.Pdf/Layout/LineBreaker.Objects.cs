@@ -68,7 +68,7 @@ internal sealed partial class LineBreaker
         if (width <= 0 || height <= 0)
             return;
 
-        if (_x + width > _line.AvailableWidth && _line.Fragments.Count > 0)
+        if (_x + width > _line.AvailableWidth && !_line.IsEmpty)
             BreakLine();
 
         _line.Fragments.Add(new ImageFragment
@@ -97,7 +97,7 @@ internal sealed partial class LineBreaker
         if (width <= 0 || height <= 0)
             return;
 
-        if (_x + width > _line.AvailableWidth && _line.Fragments.Count > 0)
+        if (_x + width > _line.AvailableWidth && !_line.IsEmpty)
             BreakLine();
 
         _line.Fragments.Add(new ShapeFragment
@@ -126,7 +126,7 @@ internal sealed partial class LineBreaker
         if (equation.Width <= 0 && equation.Height <= 0)
             return;
 
-        if (_x + equation.Width > _line.AvailableWidth && _line.Fragments.Count > 0)
+        if (_x + equation.Width > _line.AvailableWidth && !_line.IsEmpty)
             BreakLine();
 
         _line.Fragments.Add(new EquationFragment
@@ -153,7 +153,7 @@ internal sealed partial class LineBreaker
         if (chart.Width <= 0 || chart.Height <= 0)
             return;
 
-        if (_x + chart.Width > _line.AvailableWidth && _line.Fragments.Count > 0)
+        if (_x + chart.Width > _line.AvailableWidth && !_line.IsEmpty)
             BreakLine();
 
         _line.Fragments.Add(new ChartFragment
@@ -186,12 +186,35 @@ internal sealed partial class LineBreaker
         _line.Notes.Add(note);
     }
 
+    /// <summary>
+    /// Keeps an invisible Word comment reference at the current pen position. It contributes no
+    /// width, but remaining inside the fragment list means alignment, justification and bidi
+    /// reordering move the eventual annotation with the text around it.
+    /// </summary>
+    private void AddCommentReference(InlineItem item)
+    {
+        if (item.Comment is not { } comment)
+            return;
+
+        _line.Fragments.Add(new CommentFragment
+        {
+            Comment = comment,
+            RightToLeft = item.RightToLeft,
+            X = _x,
+            Width = 0,
+            Ascent = 0,
+            Descent = 0,
+            LineHeight = 0,
+            Link = item.Link,
+        });
+    }
+
     private void AddPageField(InlineItem item)
     {
         string estimate = EstimateField(item.Field, item.FieldFormat, item.FieldBookmark);
         double width = item.Style.Measure(estimate);
 
-        if (_x + width > _line.AvailableWidth && _line.Fragments.Count > 0)
+        if (_x + width > _line.AvailableWidth && !_line.IsEmpty)
             BreakLine();
 
         _line.Fragments.Add(new PageFieldFragment

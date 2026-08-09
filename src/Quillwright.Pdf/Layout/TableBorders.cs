@@ -69,29 +69,26 @@ internal static class TableBorders
     /// <param name="isFirstColumn">Whether the cell starts at the leading edge.</param>
     /// <param name="isLastColumn">Whether the cell ends at the trailing edge.</param>
     public static CellEdges EdgesOf(
-        Table table,
-        TableCell cell,
-        TableCell? above,
-        TableCell? before,
+        TableFormat table,
+        TableCellFormat cell,
+        TableCellFormat? above,
+        TableCellFormat? before,
         bool isFirstRow,
         bool isLastRow,
         bool isFirstColumn,
         bool isLastColumn)
     {
-        ArgumentNullException.ThrowIfNull(table);
-        ArgumentNullException.ThrowIfNull(cell);
-
-        BorderSet? own = cell.Format.Borders;
-        BorderSet? outer = table.Format.Borders;
+        BorderSet? own = cell.Borders;
+        BorderSet? outer = table.Borders;
 
         BorderLine? top = Resolve(
             own?.Top,
-            above?.Format.Borders?.Bottom,
+            above?.Borders?.Bottom,
             isFirstRow ? outer?.Top : outer?.InsideHorizontal);
 
         BorderLine? left = Resolve(
             own?.Left,
-            before?.Format.Borders?.Right,
+            before?.Borders?.Right,
             isFirstColumn ? outer?.Left : outer?.InsideVertical);
 
         BorderLine? right = Resolve(own?.Right, isLastColumn ? outer?.Right : outer?.InsideVertical);

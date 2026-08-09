@@ -1,4 +1,5 @@
 using System.Xml;
+using Quillwright.Diagnostics;
 
 namespace Quillwright.Xml;
 
@@ -12,6 +13,16 @@ internal static class XmlDefaults
 
     /// <summary>Settings for asynchronous streaming parsing of large parts.</summary>
     public static readonly XmlReaderSettings AsyncReaderSettings = Create(async: true);
+
+    /// <summary>Creates synchronous settings with a per-document character ceiling.</summary>
+    public static XmlReaderSettings ForBudget(DocumentLoadBudget budget)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        budget.Validate();
+        XmlReaderSettings settings = Create(async: false);
+        settings.MaxCharactersInDocument = budget.MaxXmlCharactersPerPart;
+        return settings;
+    }
 
     private static XmlReaderSettings Create(bool async) => new()
     {

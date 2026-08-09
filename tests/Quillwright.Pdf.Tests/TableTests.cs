@@ -163,6 +163,38 @@ public sealed class TableTests
     }
 
     [Fact]
+    public void TableAndConditionalCellStylesAreDrawn()
+    {
+        WordDocument document = WordDocument.Create();
+        Style style = document.Styles.GetOrAdd("StyledGrid", StyleKind.Table);
+        style.TableFormat = TableFormat.Default with
+        {
+            Borders = BorderSet.AllWithInside(
+                BorderLine.Single(Length.FromEighthPoints(8), WordColor.FromRgb(0xFF0000))),
+        };
+        style.ConditionalFormats.Add(new ConditionalTableStyle
+        {
+            Region = TableStyleRegion.FirstRow,
+            CellFormat = TableCellFormat.Default with { Shading = Shading.Solid(WordColor.FromRgb(0x00FFFF)) },
+        });
+
+        Table table = AddGrid(document.Sections[0], 2, 2);
+        table.Format = TableFormat.Default with
+        {
+            StyleId = style.Id,
+            StyleOptions = TableStyleOptions.FirstRow,
+            Width = TableWidth.FromPercent(100),
+        };
+
+        using Rendered rendered = Rendered.Of(document);
+        string content = Encoding.Latin1.GetString(rendered.Document.Pages[0].GetContent());
+
+        Assert.Contains("1 0 0 RG", content, StringComparison.Ordinal);
+        Assert.Contains("0 1 1 rg", content, StringComparison.Ordinal);
+        Assert.True(Occurrences(content, "\nS\n") >= 8);
+    }
+
+    [Fact]
     public void AHeavierCellBorderBeatsTheTablesOwn()
     {
         WordDocument document = WordDocument.Create();

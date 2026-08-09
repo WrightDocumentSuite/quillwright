@@ -65,7 +65,8 @@ internal sealed partial class PageComposer
             StartSection(sections[index]);
             _sectionPage = _pages.Count;
             _reel = [];
-            Flow(sections[index].Blocks);
+            Flow(sections[index].Blocks.Where(block =>
+                block is not Paragraph { IsSectionBreakCarrier: true, IsEmpty: true }));
 
             List<BlockBox> reel = _reel;
             _reel = null;
@@ -326,17 +327,27 @@ internal sealed partial class PageComposer
 
         foreach (InlineFragment fragment in line.Fragments)
         {
+            TagRef? owner = fragment.Link is { } link ? LinkTag(link, tag) : tag;
             if (fragment is ImageFragment image)
-                fragment.Tag = FigureTag(image.Picture, tag);
+                fragment.Tag = FigureTag(image.Picture, owner);
+            else if (fragment.Link is not null)
+                fragment.Tag = owner;
         }
 
-        Current.Items.Add(new TextLineItem { Line = line, X = x, Y = y, Tag = tag });
-        AddLinks(line, x, y);
+        Current.Items.Add(new TextLineItem
+        {
+            Line = line,
+            X = x,
+            Y = y,
+            Tag = tag,
+            PaintComments = true,
+        });
+        AddLinks(line, x, y, tag);
         DrawInlineShapes(line, x, y);
     }
 
     /// <summary>Turns the links a line carries into clickable areas over the fragments they cover.</summary>
-    private void AddLinks(LineBox line, double x, double y)
+    private void AddLinks(LineBox line, double x, double y, TagRef? tag)
     {
         Hyperlink? open = null;
         double start = 0;
@@ -363,12 +374,14 @@ internal sealed partial class PageComposer
 
             Current.Items.Add(new LinkItem
             {
+                Link = link,
                 Url = link.Url,
                 Anchor = link.Anchor,
                 X = x + from,
                 Y = y + line.BaselineFromTop - line.Ascent,
                 Width = to - from,
                 Height = line.Ascent + line.Descent,
+                Tag = LinkTag(link, tag),
             });
         }
     }

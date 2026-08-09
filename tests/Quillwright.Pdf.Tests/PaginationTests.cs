@@ -61,6 +61,74 @@ public sealed class PaginationTests
     }
 
     [Fact]
+    public void ALastRenderedPageBreakReproducesWordsSavedPagination()
+    {
+        WordDocument document = WordDocument.Create();
+        document.Sections[0].AddParagraph("Before");
+        Paragraph after = document.Sections[0].AddParagraph();
+        after.AppendObject(new RenderedPageBreak());
+        after.AppendText("After");
+
+        using Rendered rendered = Rendered.Of(document);
+
+        Assert.Equal(2, rendered.PageCount);
+        Assert.Contains("Before", rendered.Text(0), StringComparison.Ordinal);
+        Assert.Contains("After", rendered.Text(1), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LastRenderedPageBreakHintsCanBeIgnoredAfterEditing()
+    {
+        WordDocument document = WordDocument.Create();
+        document.Sections[0].AddParagraph("Before");
+        Paragraph after = document.Sections[0].AddParagraph();
+        after.AppendObject(new RenderedPageBreak());
+        after.AppendText("After");
+
+        using Rendered rendered = Rendered.Of(document, new PdfExportOptions
+        {
+            HonorLastRenderedPageBreaks = false,
+        });
+
+        Assert.Single(rendered.Document.Pages);
+        Assert.Contains("Before", rendered.Text(), StringComparison.Ordinal);
+        Assert.Contains("After", rendered.Text(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALastRenderedPageBreakAtTheStartOfACellMovesTheWholeRow()
+    {
+        WordDocument document = WordDocument.Create();
+        document.Sections[0].AddParagraph("Before");
+        Table table = document.Sections[0].AddTable(1, 1);
+        Paragraph cell = table[0, 0].Blocks.Paragraphs.Single();
+        cell.AppendObject(new RenderedPageBreak());
+        cell.AppendText("After");
+
+        using Rendered rendered = Rendered.Of(document);
+
+        Assert.Equal(2, rendered.PageCount);
+        Assert.DoesNotContain("After", rendered.Text(0), StringComparison.Ordinal);
+        Assert.Equal(1, rendered.Letters(1).Count(letter => letter.Text == "A"));
+    }
+
+    [Fact]
+    public void ARenderedHintAfterAnExplicitBreakDoesNotCreateABlankPage()
+    {
+        WordDocument document = WordDocument.Create();
+        document.Sections[0].AddParagraph("Before");
+        document.Sections[0].AddParagraph().AppendBreak(BreakKind.Page);
+        Paragraph after = document.Sections[0].AddParagraph();
+        after.AppendObject(new RenderedPageBreak());
+        after.AppendText("After");
+
+        using Rendered rendered = Rendered.Of(document);
+
+        Assert.Equal(2, rendered.PageCount);
+        Assert.Contains("After", rendered.Text(1), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PageBreakBeforeStartsANewPage()
     {
         WordDocument document = WordDocument.Create();

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Quillwright.Rtf.Tests" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <RootNamespace>Quillwright.Rtf</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Quillwright.Rtf</PackageId>
+    <Description>Imports and exports Rich Text Format (RTF 1.9.1) documents through the Quillwright document model.</Description>
+    <PackageTags>word;rtf;rich-text;conversion</PackageTags>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Quillwright\Quillwright.csproj" />
+  </ItemGroup>
+
+</Project>

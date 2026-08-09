@@ -60,22 +60,51 @@ internal static class SignatureVerifier
     }
 
     /// <summary>
+    /// Indexes the identifiers a same-document reference can name. XML-Signature fragment
+    /// references are safe to resolve only when every identifier names exactly one element.
+    /// </summary>
+    /// <returns>
+    /// The identifier map, or <see langword="null"/> when an identifier is empty or occurs
+    /// more than once in the signature.
+    /// </returns>
+    public static IReadOnlyDictionary<string, XElement>? IndexIdentifiers(XElement signature)
+    {
+        ArgumentNullException.ThrowIfNull(signature);
+
+        var identifiers = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (XElement element in signature.DescendantsAndSelf())
+        {
+            if (element.Attribute("Id")?.Value is not { } identifier)
+                continue;
+
+            if (identifier.Length == 0 || !identifiers.TryAdd(identifier, element))
+                return null;
+        }
+
+        return identifiers;
+    }
+
+    /// <summary>
     /// Checks one reference: takes what it points at, puts it through the transforms it names,
     /// and compares the digest with the one recorded.
     /// </summary>
     /// <param name="package">The open package, for a reference that names a part.</param>
     /// <param name="reference">The <c>Reference</c> element.</param>
-    /// <param name="signature">The <c>Signature</c> element, for a same-document reference.</param>
+    /// <param name="identifiers">The signature's unique identifier map.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>
     /// Whether the digest matches, or <see langword="null"/> when the reference names something
     /// this cannot reproduce — which says nothing about whether the signature is good.
     /// </returns>
     public static async ValueTask<bool?> CheckReferenceAsync(
-        OpcPackage package, XElement reference, XElement signature, CancellationToken cancellationToken)
+        OpcPackage package,
+        XElement reference,
+        IReadOnlyDictionary<string, XElement> identifiers,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(package);
         ArgumentNullException.ThrowIfNull(reference);
+        ArgumentNullException.ThrowIfNull(identifiers);
 
         string? recorded = reference.Element(Signature + "DigestValue")?.Value?.Trim();
         string? method = reference.Element(Signature + "DigestMethod")?.Attribute("Algorithm")?.Value;
@@ -84,7 +113,7 @@ internal static class SignatureVerifier
 
         using (algorithm)
         {
-            Subject? subject = await ResolveAsync(package, reference, signature, cancellationToken).ConfigureAwait(false);
+            Subject? subject = await ResolveAsync(package, reference, identifiers, cancellationToken).ConfigureAwait(false);
             if (subject is null)
                 return null;
 
@@ -95,17 +124,19 @@ internal static class SignatureVerifier
 
     /// <summary>What a reference points at, before its transforms are applied.</summary>
     private static async ValueTask<Subject?> ResolveAsync(
-        OpcPackage package, XElement reference, XElement signature, CancellationToken cancellationToken)
+        OpcPackage package,
+        XElement reference,
+        IReadOnlyDictionary<string, XElement> identifiers,
+        CancellationToken cancellationToken)
     {
         string uri = reference.Attribute("URI")?.Value ?? string.Empty;
 
         // A reference into the signature part itself names an element by its identifier.
         if (uri.StartsWith('#'))
         {
-            XElement? target = signature.Document?.Descendants()
-                .FirstOrDefault(element => element.Attribute("Id")?.Value == uri[1..]);
-
-            return target is null ? null : new Subject(null, target);
+            return identifiers.TryGetValue(uri[1..], out XElement? target)
+                ? new Subject(null, target)
+                : null;
         }
 
         int query = uri.IndexOf('?', StringComparison.Ordinal);

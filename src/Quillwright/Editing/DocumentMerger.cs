@@ -364,6 +364,7 @@ internal sealed class DocumentMerger
             Fill = shape.Fill,
             Direction = shape.Direction,
             Outline = shape.Outline,
+            IsLine = shape.IsLine,
         };
     }
 

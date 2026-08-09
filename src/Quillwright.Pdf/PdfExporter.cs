@@ -34,6 +34,15 @@ public static class PdfExporter
         PdfExportOptions settings = options ?? PdfExportOptions.Default;
         var pdf = PdfDocument.Create();
         var diagnostics = new PdfExportDiagnostics();
+        if (document.Comments.Count > 0 && !settings.IncludeComments)
+        {
+            diagnostics.Add(
+                PdfExportWarningKind.ContentSkipped,
+                $"Comments, replies, and review state are not included in the rendered PDF. Set " +
+                $"{nameof(PdfExportOptions)}.{nameof(PdfExportOptions.IncludeComments)} to create interactive annotations.",
+                "comments");
+        }
+
         var context = new PdfExportContext(document, pdf, settings, diagnostics);
         var fields = new PageFieldResolver(diagnostics);
 

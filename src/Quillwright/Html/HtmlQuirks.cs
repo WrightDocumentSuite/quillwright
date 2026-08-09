@@ -69,8 +69,6 @@ internal static class HtmlQuirks
         "-//W3O//DTD W3 HTML 3.0//",
         "-//WebTechs//DTD Mozilla HTML 2.0//",
         "-//WebTechs//DTD Mozilla HTML//",
-        "-//W3C//DTD XHTML 1.0 Frameset//",
-        "-//W3C//DTD XHTML 1.0 Transitional//",
     ];
 
     private static readonly string[] PublicIdentifiers =

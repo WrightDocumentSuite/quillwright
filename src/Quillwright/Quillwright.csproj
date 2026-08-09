@@ -8,6 +8,8 @@
     <InternalsVisibleTo Include="Quillwright.Doc.Tests" />
     <InternalsVisibleTo Include="Quillwright.Pdf" />
     <InternalsVisibleTo Include="Quillwright.Pdf.Tests" />
+    <InternalsVisibleTo Include="Quillwright.Rtf" />
+    <InternalsVisibleTo Include="Quillwright.Rtf.Tests" />
   </ItemGroup>
 
   <PropertyGroup>

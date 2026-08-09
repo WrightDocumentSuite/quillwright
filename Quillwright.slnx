@@ -5,12 +5,14 @@
     <Project Path="src/Quillwright.Templates.Generator/Quillwright.Templates.Generator.csproj" />
     <Project Path="src/Quillwright.Doc/Quillwright.Doc.csproj" />
     <Project Path="src/Quillwright.Pdf/Quillwright.Pdf.csproj" />
+    <Project Path="src/Quillwright.Rtf/Quillwright.Rtf.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Quillwright.Tests/Quillwright.Tests.csproj" />
     <Project Path="tests/Quillwright.Templates.Tests/Quillwright.Templates.Tests.csproj" />
     <Project Path="tests/Quillwright.Doc.Tests/Quillwright.Doc.Tests.csproj" />
     <Project Path="tests/Quillwright.Pdf.Tests/Quillwright.Pdf.Tests.csproj" />
+    <Project Path="tests/Quillwright.Rtf.Tests/Quillwright.Rtf.Tests.csproj" />
   </Folder>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/Quillwright.Benchmarks/Quillwright.Benchmarks.csproj" />

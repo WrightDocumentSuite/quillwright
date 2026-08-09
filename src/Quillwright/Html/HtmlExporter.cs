@@ -32,6 +32,14 @@ internal static class HtmlExporter
 
         string mediaDirectoryName = MarkdownPath.NormalizeMediaDirectoryName(options.MediaDirectoryName);
         var diagnostics = new HtmlExportDiagnostics();
+        if (document.Comments.Count > 0)
+        {
+            diagnostics.Add(
+                HtmlExportWarningKind.ContentSkipped,
+                "Comments, replies, and review state are not included in the HTML export.",
+                "comments");
+        }
+
         var context = new HtmlContext(document, options, mediaDirectoryName, diagnostics);
         var body = new StringBuilder();
 

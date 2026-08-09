@@ -61,6 +61,13 @@ public sealed partial class Paragraph : Block
     public bool IsEmpty => _length == 0;
 
     /// <summary>
+    /// Whether this paragraph carried the section properties in the loaded package. An empty
+    /// carrier remains part of the editable model and round-trips as a paragraph, but pagination
+    /// engines may treat its mark as the section break rather than as another visible body line.
+    /// </summary>
+    public bool IsSectionBreakCarrier { get; internal set; }
+
+    /// <summary>
     /// The characters of the paragraph. Objects appear as their placeholder character, so
     /// offsets in this string line up with every anchor in the paragraph.
     /// </summary>

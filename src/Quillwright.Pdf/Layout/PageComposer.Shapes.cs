@@ -16,12 +16,6 @@ namespace Quillwright.Pdf.Layout;
 /// </remarks>
 internal sealed partial class PageComposer
 {
-    /// <summary>What Word leaves between a text box's frame and its words, at the sides.</summary>
-    private const double ShapeInsetSide = 7.2;
-
-    /// <summary>The same, above and below.</summary>
-    private const double ShapeInsetCap = 3.6;
-
     private readonly Dictionary<Shape, List<BlockBox>> _shapeContent = [];
 
     /// <summary>Whether the words of a shape run down a turned box rather than across it.</summary>
@@ -39,8 +33,8 @@ internal sealed partial class PageComposer
             return cached;
 
         double inner = IsTurned(shape)
-            ? Math.Max(1, shape.Height.Points - (2 * ShapeInsetCap))
-            : Math.Max(1, shape.Width.Points - (2 * ShapeInsetSide));
+            ? Math.Max(1, shape.Height.Points - shape.InsetTop.Points - shape.InsetBottom.Points)
+            : Math.Max(1, shape.Width.Points - shape.InsetLeft.Points - shape.InsetRight.Points);
 
         List<BlockBox> content = MeasureBlocks(Expand(shape.Content.Blocks), inner);
         _shapeContent[shape] = content;
@@ -57,6 +51,25 @@ internal sealed partial class PageComposer
         double width = shape.Width.Points;
         double height = shape.Height.Points;
         List<PageItem> target = furniture ? Current.Furniture : Current.Items;
+
+        if (shape.IsLine)
+        {
+            if (shape.Outline is { IsEmpty: false } line)
+            {
+                target.Add(new StrokeItem
+                {
+                    X = x,
+                    Y = y,
+                    X2 = x + width,
+                    Y2 = y + height,
+                    Thickness = Math.Max(0.25, line.Width.Points),
+                    Color = _context.ColorOf(line.Color, PdfColor.Black),
+                    Style = line.Style,
+                });
+            }
+
+            return;
+        }
 
         if (shape.Fill is { } fill && !fill.IsAuto)
         {
@@ -114,9 +127,9 @@ internal sealed partial class PageComposer
             return;
         }
 
-        double left = x + ShapeInsetSide;
-        double limit = y + height - ShapeInsetCap;
-        double cursor = y + ShapeInsetCap;
+        double left = x + shape.InsetLeft.Points;
+        double limit = y + height - shape.InsetBottom.Points;
+        double cursor = y + shape.InsetTop.Points;
 
         foreach (BlockBox block in ShapeContent(shape))
         {
@@ -152,8 +165,8 @@ internal sealed partial class PageComposer
     {
         bool downwards = shape.Direction == TextDirection.TopToBottomRightToLeft;
         double width = shape.Width.Points;
-        double length = Math.Max(1, height - (2 * ShapeInsetCap));
-        double room = width - (2 * ShapeInsetSide);
+        double length = Math.Max(1, height - shape.InsetTop.Points - shape.InsetBottom.Points);
+        double room = width - shape.InsetLeft.Points - shape.InsetRight.Points;
         double offset = 0;
 
         foreach (BlockBox block in ShapeContent(shape))
@@ -175,14 +188,14 @@ internal sealed partial class PageComposer
                 }
 
                 double stripLeft = downwards
-                    ? x + width - ShapeInsetSide - offset - line.Height
-                    : x + ShapeInsetSide + offset;
+                    ? x + width - shape.InsetRight.Points - offset - line.Height
+                    : x + shape.InsetLeft.Points + offset;
 
                 target.Add(new TextLineItem
                 {
                     Line = line,
                     X = stripLeft,
-                    Y = y + ShapeInsetCap,
+                    Y = y + shape.InsetTop.Points,
                     Length = length,
                     Rotation = downwards ? 90 : 270,
                     Tag = furniture ? FurnitureTag(paragraph) : TagOf(paragraph),
@@ -205,16 +218,18 @@ internal sealed partial class PageComposer
                 return false;
 
             double lineLeft = left + line.IndentLeft;
+            TagRef? tag = furniture ? FurnitureTag(paragraph) : TagOf(paragraph);
             target.Add(new TextLineItem
             {
                 Line = line,
                 X = lineLeft,
                 Y = cursor,
-                Tag = furniture ? FurnitureTag(paragraph) : TagOf(paragraph),
+                Tag = tag,
+                PaintComments = !furniture,
             });
 
             if (!furniture)
-                AddLinks(line, lineLeft, cursor);
+                AddLinks(line, lineLeft, cursor, tag);
 
             // A box inside a box: the inner one is drawn where its line landed, like any other.
             DrawInlineShapes(line, lineLeft, cursor, furniture);

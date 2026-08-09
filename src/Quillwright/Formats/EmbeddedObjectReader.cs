@@ -32,7 +32,7 @@ internal static class EmbeddedObjectReader
             context.Preserved.Parts.GetValueOrDefault(path) is not { Length: > 0 } content)
             return null;
 
-        OleDescription? description = OleContainer.Describe(content);
+        OleDescription? description = OleContainer.Describe(content, context.Options.Budget);
         return new EmbeddedObject
         {
             Location = path,

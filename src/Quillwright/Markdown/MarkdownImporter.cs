@@ -1,4 +1,6 @@
 using System.Text;
+using Quillwright.Diagnostics;
+using Quillwright.IO;
 using Quillwright.Model;
 using Quillwright.Primitives;
 using Quillwright.Styles;
@@ -28,12 +30,15 @@ public static class MarkdownImporter
         ArgumentNullException.ThrowIfNull(markdown);
 
         var context = new ImportContext(options ?? new MarkdownImportOptions());
+        context.Budget.ValidateText(markdown);
         List<Line> lines = Split(markdown);
         SkipFrontMatter(lines, context);
         CollectDefinitions(lines, context);
 
-        context.Parser = new MarkdownInlineParser(context.Definitions, context.ResolveImage);
-        ParseBlocks(lines, 0, lines.Count, context, context.Document.Sections[0].Blocks, quoted: false, listDepth: -1);
+        context.Parser = new MarkdownInlineParser(context.Definitions, context.ResolveImage, context.Budget);
+        ParseBlocks(
+            lines, 0, lines.Count, context, context.Document.Sections[0].Blocks,
+            quoted: false, listDepth: -1, markupDepth: 1);
 
         if (context.Document.Sections[0].Blocks.Count == 0)
             context.Document.Sections[0].AddParagraph(string.Empty);
@@ -52,17 +57,25 @@ public static class MarkdownImporter
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
 
-        string markdown = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
         options ??= new MarkdownImportOptions();
+        string markdown = await DocumentInput.ReadUtf8TextFileAsync(path, options.Budget, cancellationToken).ConfigureAwait(false);
         if (options.MediaDirectory is null)
             options = options with { MediaDirectory = Path.GetDirectoryName(Path.GetFullPath(path)) };
 
         return Import(markdown, options);
     }
 
-    private sealed class ImportContext(MarkdownImportOptions options)
+    private sealed class ImportContext
     {
-        public MarkdownImportOptions Options { get; } = options;
+        public ImportContext(MarkdownImportOptions options)
+        {
+            Options = options;
+            Budget = new DocumentLoadBudgetState(options.Budget);
+        }
+
+        public MarkdownImportOptions Options { get; }
+
+        public DocumentLoadBudgetState Budget { get; }
 
         public WordDocument Document { get; } = WordDocument.Create();
 
@@ -102,23 +115,46 @@ public static class MarkdownImporter
                 return null;
             }
 
-            string full = Path.GetFullPath(Path.Combine(Options.MediaDirectory, url));
-            if (!full.StartsWith(Path.GetFullPath(Options.MediaDirectory), StringComparison.OrdinalIgnoreCase))
+            if (Budget.MaximumNextMediaBytes < 1)
+            {
+                throw new DocumentLoadLimitException(
+                    nameof(DocumentLoadBudget.MaxTotalMediaBytes),
+                    Budget.Budget.MaxTotalMediaBytes,
+                    Budget.Budget.MaxTotalMediaBytes + 1);
+            }
+
+            MediaFileReadResult file = MediaFileResolver.Read(
+                Options.MediaDirectory, url, Budget.MaximumNextMediaBytes);
+            if (file.Status == MediaFileReadStatus.Unsafe)
             {
                 Diagnostics.Add(
                     MarkdownImportWarningKind.ImageSkipped,
-                    "An image path that climbs out of the media directory is not followed",
+                    "A rooted image path, a traversal segment or a symbolic link is not followed",
                     url, line);
                 return null;
             }
 
-            if (!File.Exists(full))
+            if (file.Status == MediaFileReadStatus.Missing)
             {
                 Diagnostics.Add(MarkdownImportWarningKind.ImageSkipped, "The image file does not exist", url, line);
                 return null;
             }
 
-            return Document.Media.Add(ImageData.FromBytes(File.ReadAllBytes(full)));
+            if (file.Status == MediaFileReadStatus.Unreadable)
+            {
+                Diagnostics.Add(MarkdownImportWarningKind.ImageSkipped, "The image file could not be read", url, line);
+                return null;
+            }
+
+            if (file.Status == MediaFileReadStatus.TooLarge)
+            {
+                Budget.EnsureMedia(file.Length);
+                Diagnostics.Add(MarkdownImportWarningKind.ImageSkipped, "The image file is too large to read", url, line);
+                return null;
+            }
+
+            Budget.AddMedia(file.Bytes!.LongLength);
+            return Document.Media.Add(ImageData.FromBytes(file.Bytes!));
         }
 
         private ImageData? DataUri(string url, int line)
@@ -132,13 +168,33 @@ public static class MarkdownImporter
 
             try
             {
-                return Document.Media.Add(ImageData.FromBytes(Convert.FromBase64String(url[(comma + 1)..])));
+                ReadOnlySpan<char> encoded = url.AsSpan(comma + 1);
+                Budget.EnsureMedia(EstimatedBase64Bytes(encoded));
+                byte[] bytes = Convert.FromBase64String(url[(comma + 1)..]);
+                Budget.AddMedia(bytes.LongLength);
+                return Document.Media.Add(ImageData.FromBytes(bytes));
             }
             catch (FormatException)
             {
                 Diagnostics.Add(MarkdownImportWarningKind.ImageSkipped, "The data URI is not valid base64", null, line);
                 return null;
             }
+        }
+
+        private static long EstimatedBase64Bytes(ReadOnlySpan<char> encoded)
+        {
+            long characters = 0;
+            int padding = 0;
+            foreach (char character in encoded)
+            {
+                if (char.IsWhiteSpace(character))
+                    continue;
+                characters++;
+                padding = character == '=' ? padding + 1 : 0;
+            }
+
+            long bytes = ((characters + 3) / 4) * 3 - Math.Min(padding, 2);
+            return Math.Max(0, bytes);
         }
     }
 
@@ -226,14 +282,23 @@ public static class MarkdownImporter
                     continue;
             }
 
+            context.Budget.AddMarkupNode();
             context.Definitions[MarkdownInlineParser.LabelKey(label)] = (url.Trim('<', '>'), title);
             lines.RemoveAt(i);
         }
     }
 
     private static void ParseBlocks(
-        List<Line> lines, int from, int to, ImportContext context, IList<Block> target, bool quoted, int listDepth)
+        List<Line> lines,
+        int from,
+        int to,
+        ImportContext context,
+        IList<Block> target,
+        bool quoted,
+        int listDepth,
+        int markupDepth)
     {
+        context.Budget.EnsureMarkupDepth(markupDepth);
         int i = from;
         var paragraph = new List<Line>();
 
@@ -271,7 +336,7 @@ public static class MarkdownImporter
 
             if (paragraph.Count == 0 && indent < 4 && IsThematicBreak(trimmed))
             {
-                target.Add(Rule());
+                AddBlock(context, target, Rule());
                 i++;
                 continue;
             }
@@ -301,14 +366,14 @@ public static class MarkdownImporter
             if (indent < 4 && trimmed.StartsWith('>'))
             {
                 FlushParagraph();
-                i = AddQuote(lines, i, to, context, target, listDepth);
+                i = AddQuote(lines, i, to, context, target, listDepth, markupDepth);
                 continue;
             }
 
             if (indent < 4 && ListMarker(text) is { } marker && !(paragraph.Count > 0 && marker.Ordered && marker.Number != 1))
             {
                 FlushParagraph();
-                i = AddList(lines, i, to, marker, context, target, quoted, listDepth + 1);
+                i = AddList(lines, i, to, marker, context, target, quoted, listDepth + 1, markupDepth);
                 continue;
             }
 
@@ -344,7 +409,7 @@ public static class MarkdownImporter
         }
 
         context.Parser.Fill(paragraph, inline, RunFormat.Default, source[0].Number);
-        target.Add(paragraph);
+        AddBlock(context, target, paragraph);
     }
 
     private static void AddHeading(List<Line> source, int level, ImportContext context, IList<Block> target)
@@ -352,7 +417,7 @@ public static class MarkdownImporter
         var paragraph = new Paragraph();
         paragraph.Format = paragraph.Format with { StyleId = context.Document.Styles.GetOrAdd($"Heading{level}").Id };
         context.Parser.Fill(paragraph, JoinParagraph(source), RunFormat.Default, source[0].Number);
-        target.Add(paragraph);
+        AddBlock(context, target, paragraph);
     }
 
     /// <summary>Soft endings fold to spaces; two trailing spaces or a backslash break the line.</summary>
@@ -493,7 +558,7 @@ public static class MarkdownImporter
             code.Append(text.Length >= indent ? text[Math.Min(indent, text.Length - text.TrimStart().Length)..] : text).Append('\n');
         }
 
-        target.Add(CodeParagraph(code.ToString().TrimEnd('\n'), context));
+        AddBlock(context, target, CodeParagraph(code.ToString().TrimEnd('\n'), context));
         return i;
     }
 
@@ -525,7 +590,7 @@ public static class MarkdownImporter
             i++;
         }
 
-        target.Add(CodeParagraph(code.ToString().TrimEnd('\n'), context));
+        AddBlock(context, target, CodeParagraph(code.ToString().TrimEnd('\n'), context));
         return i;
     }
 
@@ -537,7 +602,14 @@ public static class MarkdownImporter
         return paragraph;
     }
 
-    private static int AddQuote(List<Line> lines, int at, int to, ImportContext context, IList<Block> target, int listDepth)
+    private static int AddQuote(
+        List<Line> lines,
+        int at,
+        int to,
+        ImportContext context,
+        IList<Block> target,
+        int listDepth,
+        int markupDepth)
     {
         var inner = new List<Line>();
         int i = at;
@@ -556,7 +628,7 @@ public static class MarkdownImporter
             i++;
         }
 
-        ParseBlocks(inner, 0, inner.Count, context, target, quoted: true, listDepth);
+        ParseBlocks(inner, 0, inner.Count, context, target, quoted: true, listDepth, markupDepth + 1);
         return i;
     }
 
@@ -622,7 +694,15 @@ public static class MarkdownImporter
     }
 
     private static int AddList(
-        List<Line> lines, int at, int to, Marker first, ImportContext context, IList<Block> target, bool quoted, int depth)
+        List<Line> lines,
+        int at,
+        int to,
+        Marker first,
+        ImportContext context,
+        IList<Block> target,
+        bool quoted,
+        int depth,
+        int markupDepth)
     {
         if (depth == 0)
         {
@@ -681,17 +761,24 @@ public static class MarkdownImporter
                 break;
             }
 
-            AddListItem(item, marker.Value, instance, depth, context, target, quoted);
+            AddListItem(item, marker.Value, instance, depth, context, target, quoted, markupDepth);
         }
 
         return i;
     }
 
     private static void AddListItem(
-        List<Line> item, Marker marker, int instance, int depth, ImportContext context, IList<Block> target, bool quoted)
+        List<Line> item,
+        Marker marker,
+        int instance,
+        int depth,
+        ImportContext context,
+        IList<Block> target,
+        bool quoted,
+        int markupDepth)
     {
         var blocks = new List<Block>();
-        ParseBlocks(item, 0, item.Count, context, blocks, quoted, depth);
+        ParseBlocks(item, 0, item.Count, context, blocks, quoted, depth, markupDepth + 1);
 
         bool numbered = false;
         foreach (Block block in blocks)
@@ -768,6 +855,7 @@ public static class MarkdownImporter
 
         TableRow head = BuildRow(header, alignments, bold: true, lines[at].Number, context);
         head.Format = head.Format with { IsHeader = true };
+        context.Budget.AddMarkupNode();
         table.Rows.Add(head);
 
         int i = at + 2;
@@ -777,11 +865,12 @@ public static class MarkdownImporter
             if (text.Trim().Length == 0 || !text.Contains('|', StringComparison.Ordinal))
                 break;
 
+            context.Budget.AddMarkupNode();
             table.Rows.Add(BuildRow(SplitRow(text.Trim()), alignments, bold: false, lines[i].Number, context));
             i++;
         }
 
-        target.Add(table);
+        AddBlock(context, target, table);
         return i;
     }
 
@@ -800,6 +889,7 @@ public static class MarkdownImporter
             context.Parser.Fill(
                 paragraph, content, bold ? RunFormat.Default with { Bold = true } : RunFormat.Default, line);
             cell.Blocks.Add(paragraph);
+            context.Budget.AddMarkupNode();
             row.Cells.Add(cell);
         }
 
@@ -842,4 +932,10 @@ public static class MarkdownImporter
     }
 
     private static string Snippet(string text) => text.Length <= 40 ? text : text[..40] + "…";
+
+    private static void AddBlock(ImportContext context, IList<Block> target, Block block)
+    {
+        context.Budget.AddMarkupNode();
+        target.Add(block);
+    }
 }

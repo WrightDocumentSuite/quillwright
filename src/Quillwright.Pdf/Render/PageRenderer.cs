@@ -15,6 +15,7 @@ internal sealed class PageRenderer
     private readonly PdfExportContext _context;
     private readonly ImageEmbedder _images;
     private readonly PageFieldResolver _fields;
+    private readonly CommentRenderer _comments;
     private readonly List<(PdfLinkAnnotation Link, string Anchor)> _internal = [];
 
     internal PageRenderer(PdfExportContext context, PageFieldResolver fields)
@@ -22,6 +23,7 @@ internal sealed class PageRenderer
         _context = context;
         _images = new ImageEmbedder(context);
         _fields = fields;
+        _comments = new CommentRenderer(context);
     }
 
     /// <summary>Draws every composed page.</summary>
@@ -40,6 +42,7 @@ internal sealed class PageRenderer
             RenderPage(composed, tags);
 
         Aim(bookmarks);
+        _comments.Complete();
     }
 
     private void RenderPage(ComposedPage composed, ITagWriter? tags)
@@ -53,15 +56,29 @@ internal sealed class PageRenderer
             page,
             composed,
             _images,
+            _comments,
             field => _fields.Resolve(field, composed),
             (link, anchor) => _internal.Add((link, anchor)),
             sink);
 
+        List<LinkItem> links = [];
         foreach (PageItem item in composed.Furniture)
-            painter.Paint(item);
+        {
+            if (item is LinkItem link)
+                links.Add(link);
+            else
+                painter.Paint(item);
+        }
 
         foreach (PageItem item in composed.Items)
-            painter.Paint(item);
+        {
+            if (item is LinkItem link)
+                links.Add(link);
+            else
+                painter.Paint(item);
+        }
+
+        painter.PaintLinks(links);
 
         canvas.Commit();
     }

@@ -11,7 +11,7 @@ internal static partial class DocxLoader
     private static async ValueTask<WordDocument> ReadAsync(Stream stream, LoadOptions options, CancellationToken cancellationToken)
     {
         OpcPackage package = await OpcPackage
-            .OpenReadAsync(stream, leaveOpen: true, cancellationToken, options.Password)
+            .OpenReadAsync(stream, leaveOpen: true, cancellationToken, options.Password, options.Budget)
             .ConfigureAwait(false);
         await using (package.ConfigureAwait(false))
         {
@@ -219,7 +219,7 @@ internal static partial class DocxLoader
 
         try
         {
-            return Vba.VbaProject.Read(CompoundFile.Open(bytes), string.Empty);
+            return Vba.VbaProject.Read(CompoundFile.Open(bytes, context.Options.Budget), string.Empty);
         }
         catch (Exception error) when (error is CompoundFileException or ArgumentException or IndexOutOfRangeException)
         {

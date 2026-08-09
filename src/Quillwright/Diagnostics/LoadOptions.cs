@@ -10,6 +10,12 @@ public sealed class LoadOptions
     public static LoadOptions Default { get; } = new();
 
     /// <summary>
+    /// Resource limits applied while opening the package and parsing its XML. The defaults
+    /// accept ordinary large documents while bounding ZIP expansion and markup complexity.
+    /// </summary>
+    public DocumentLoadBudget Budget { get; init; } = DocumentLoadBudget.Default;
+
+    /// <summary>
     /// Invoked for every recoverable problem as it is found. Warnings are also collected in
     /// <see cref="Model.WordDocument.LoadDiagnostics"/>.
     /// </summary>

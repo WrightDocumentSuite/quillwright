@@ -46,6 +46,13 @@ internal sealed partial class PageComposer
             ? new TagRef("Figure", picture) { Parent = parent, AlternateText = picture.Description }
             : null;
 
+    /// <summary>
+    /// The semantic link that owns both its marked text and the whole PDF annotation object.
+    /// Reusing the hyperlink model object keeps a link split across lines in one element.
+    /// </summary>
+    private TagRef? LinkTag(Hyperlink link, TagRef? parent) =>
+        _context.Options.Tagged ? new TagRef("Link", link) { Parent = parent } : null;
+
     /// <summary>The tag of a heading, or <see langword="null"/> for an ordinary paragraph.</summary>
     /// <remarks>
     /// The logical structure defines <c>H1</c> to <c>H6</c> and no further, so a document outlined

@@ -22,6 +22,10 @@ internal sealed partial class HtmlTreeBuilder
                 InsertComment(token);
                 return;
 
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token);
+                return;
+
             case HtmlTokenKind.Doctype:
                 return;
 
@@ -240,6 +244,10 @@ internal sealed partial class HtmlTreeBuilder
                 InsertComment(token);
                 return;
 
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token);
+                return;
+
             case HtmlTokenKind.Doctype:
                 return;
 
@@ -439,6 +447,7 @@ internal sealed partial class HtmlTreeBuilder
         {
             case HtmlTokenKind.Character:
             case HtmlTokenKind.Comment:
+            case HtmlTokenKind.ProcessingInstruction:
             case HtmlTokenKind.Doctype:
                 InBodyMode(token);
                 return;
@@ -527,6 +536,10 @@ internal sealed partial class HtmlTreeBuilder
                 InsertComment(token);
                 return;
 
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token);
+                return;
+
             case HtmlTokenKind.Doctype:
                 return;
 
@@ -542,7 +555,7 @@ internal sealed partial class HtmlTreeBuilder
 
             case HtmlTokenKind.StartTag:
             {
-                HtmlNamespace space = Current?.Namespace ?? HtmlNamespace.Html;
+                HtmlNamespace space = AdjustedCurrent?.Namespace ?? HtmlNamespace.Html;
                 if (space == HtmlNamespace.Svg && SvgCase(token.TagName) is { } adjusted)
                 {
                     token.Name.Clear();

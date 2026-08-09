@@ -23,6 +23,8 @@ internal sealed class InlineWalker
 
     private CharacterStyle? _pendingStyle;
     private Hyperlink? _pendingLink;
+    private bool _insideTableCell;
+    private Paragraph? _paragraph;
 
     internal InlineWalker(PdfExportContext context, TextMeasurer measurer)
     {
@@ -57,6 +59,8 @@ internal sealed class InlineWalker
         _buffer.Clear();
         _pendingStyle = null;
         _pendingLink = null;
+        _insideTableCell = paragraph.Parent is TableCell;
+        _paragraph = paragraph;
 
         foreach (Run run in paragraph.Runs)
         {
@@ -202,6 +206,34 @@ internal sealed class InlineWalker
                 items.Add(Symbol(symbol, style, link));
                 break;
 
+            case RenderedPageBreak when visible && fields.Prints &&
+                _context.Options.HonorLastRenderedPageBreaks && !_insideTableCell &&
+                (_paragraph is null || !FollowsExplicitPageBreak(_paragraph)):
+                items.Add(InlineItem.Control(InlineKind.PageBreak, style, link));
+                break;
+
+            case CommentReference reference when visible && fields.Prints && _context.Options.IncludeComments:
+                if (_context.Source.Comments.FirstOrDefault(comment => comment.Id == reference.Id) is { } comment)
+                {
+                    items.Add(new InlineItem
+                    {
+                        Kind = InlineKind.CommentReference,
+                        Style = style,
+                        Comment = comment,
+                        Link = link,
+                        RightToLeft = BaseRightToLeft,
+                    });
+                }
+                else
+                {
+                    _context.Diagnostics.Add(
+                        PdfExportWarningKind.ContentSkipped,
+                        $"Comment reference {reference.Id} has no matching comment body and was skipped.",
+                        "comment-references");
+                }
+
+                break;
+
             case RenderedPageBreak or CommentReference or NoteSeparator:
                 break;
 
@@ -218,7 +250,9 @@ internal sealed class InlineWalker
 
             case Shape shape when visible && fields.Prints:
                 // A shape whose markup does not state a size cannot be drawn: there is no box.
-                if (shape.Width.Points > 0.5 && shape.Height.Points > 0.5)
+                if (shape.IsLine
+                    ? Math.Max(shape.Width.Points, shape.Height.Points) > 0.5
+                    : shape.Width.Points > 0.5 && shape.Height.Points > 0.5)
                 {
                     items.Add(new InlineItem
                     {
@@ -369,6 +403,28 @@ internal sealed class InlineWalker
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Word often saves a last-rendered hint in the paragraph immediately after a real page
+    /// break.  Both describe the same boundary; treating both as commands creates an empty page.
+    /// </summary>
+    private bool FollowsExplicitPageBreak(Paragraph paragraph)
+    {
+        foreach (Section section in _context.Source.Sections)
+        {
+            for (int i = 1; i < section.Blocks.Count; i++)
+            {
+                if (!ReferenceEquals(section.Blocks[i], paragraph) || section.Blocks[i - 1] is not Paragraph previous)
+                    continue;
+
+                return previous.Objects.Any(anchored =>
+                    anchored.Object is Break { Kind: BreakKind.Page } &&
+                    anchored.Offset == previous.TextLength - 1);
+            }
+        }
+
+        return false;
     }
 
     private static FieldTracker.PageField? SimpleFieldStart(

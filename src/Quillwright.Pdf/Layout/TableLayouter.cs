@@ -34,13 +34,20 @@ internal sealed class TableLayouter
     {
         ArgumentNullException.ThrowIfNull(table);
 
-        double[] columns = TableColumns.Compute(table, available, NaturalWidths(table, available));
+        TableFormat tableFormat = _context.Resolver.ResolveTableFormat(table);
+        double[] columns = TableColumns.Compute(
+            table,
+            tableFormat,
+            _context.Resolver,
+            available,
+            NaturalWidths(table, available));
         var box = new TableBox
         {
             Source = table,
+            Format = tableFormat,
             Columns = columns,
             Rows = [],
-            Offset = Offset(table, available, columns.Sum()),
+            Offset = Offset(tableFormat, available, columns.Sum()),
             SpacingBefore = 0,
             SpacingAfter = 0,
         };
@@ -70,16 +77,18 @@ internal sealed class TableLayouter
         for (int index = 0; index < table.Rows.Count; index++)
         {
             TableRow row = table.Rows[index];
+            TableRowFormat rowFormat = _context.Resolver.ResolveTableRowFormat(row);
             var cells = new List<CellBox>(row.Cells.Count);
-            int column = Math.Max(0, row.Format.GridBefore ?? 0);
+            int column = Math.Max(0, rowFormat.GridBefore ?? 0);
 
             for (int position = 0; position < row.Cells.Count; position++)
             {
                 TableCell cell = row.Cells[position];
-                int span = Math.Max(1, cell.Format.GridSpan ?? 1);
+                TableCellFormat cellFormat = _context.Resolver.ResolveTableCellFormat(cell);
+                int span = Math.Max(1, cellFormat.GridSpan ?? 1);
 
-                if (cell.Format.VerticalMerge != VerticalMerge.Continue)
-                    cells.Add(Measure(box, table, cell, index, position, column, span));
+                if (cellFormat.VerticalMerge != VerticalMerge.Continue)
+                    cells.Add(Measure(box, table, cell, cellFormat, index, position, column, span));
 
                 column += span;
             }
@@ -87,39 +96,67 @@ internal sealed class TableLayouter
             box.Rows.Add(new RowBox
             {
                 Source = row,
+                Format = rowFormat,
                 Cells = cells,
-                IsHeader = row.Format.IsHeader == true,
-                CanSplit = row.Format.CannotSplit != true,
+                IsHeader = rowFormat.IsHeader == true,
+                StartsNewPage = _context.Options.HonorLastRenderedPageBreaks && StartsWithRenderedPageBreak(row),
+                CanSplit = rowFormat.CannotSplit != true,
             });
         }
 
         Merge(box, table);
     }
 
-    private CellBox Measure(TableBox box, Table table, TableCell cell, int rowIndex, int position, int column, int span)
+    private static bool StartsWithRenderedPageBreak(TableRow row)
     {
-        CellPadding padding = PaddingOf(table, cell);
+        foreach (TableCell cell in row.Cells)
+        {
+            foreach (Paragraph paragraph in cell.Blocks.Paragraphs)
+            {
+                foreach ((int offset, InlineObject value) in paragraph.Objects)
+                {
+                    if (offset == 0 && value is RenderedPageBreak)
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private CellBox Measure(
+        TableBox box,
+        Table table,
+        TableCell cell,
+        TableCellFormat cellFormat,
+        int rowIndex,
+        int position,
+        int column,
+        int span)
+    {
+        CellPadding padding = PaddingOf(box.Format, cellFormat);
         double width = Math.Max(1, box.WidthOf(column, span) - padding.Left - padding.Right);
-        TextDirection direction = cell.Format.TextDirection ?? TextDirection.LeftToRightTopToBottom;
+        TextDirection direction = cellFormat.TextDirection ?? TextDirection.LeftToRightTopToBottom;
         bool turned = direction is TextDirection.TopToBottomRightToLeft or TextDirection.BottomToTopLeftToRight;
 
         TableRow row = table.Rows[rowIndex];
-        TableCell? above = rowIndex > 0 ? Neighbour(table.Rows[rowIndex - 1], column) : null;
-        TableCell? before = position > 0 ? row.Cells[position - 1] : null;
+        TableCellFormat? above = rowIndex > 0 ? Neighbour(table.Rows[rowIndex - 1], column) : null;
+        TableCellFormat? before = position > 0 ? _context.Resolver.ResolveTableCellFormat(row.Cells[position - 1]) : null;
 
         var measured = new CellBox
         {
             Source = cell,
+            Format = cellFormat,
             Column = column,
             Span = span,
             Content = turned ? [] : Content(cell, width),
             Padding = padding,
             Direction = turned ? direction : TextDirection.LeftToRightTopToBottom,
-            VerticalAlignment = cell.Format.VerticalAlignment ?? VerticalCellAlignment.Top,
-            Fill = FillOf(table, cell),
+            VerticalAlignment = cellFormat.VerticalAlignment ?? VerticalCellAlignment.Top,
+            Fill = FillOf(box.Format, cellFormat),
             Edges = TableBorders.EdgesOf(
-                table,
-                cell,
+                box.Format,
+                cellFormat,
                 above,
                 before,
                 isFirstRow: rowIndex == 0,
@@ -248,19 +285,19 @@ internal sealed class TableLayouter
     }
 
     /// <summary>Finds how far down a merged cell reaches and gives it those rows.</summary>
-    private static void Merge(TableBox box, Table table)
+    private void Merge(TableBox box, Table table)
     {
         for (int index = 0; index < box.Rows.Count; index++)
         {
             foreach (CellBox cell in box.Rows[index].Cells)
             {
-                if (cell.Source.Format.VerticalMerge != VerticalMerge.Restart)
+                if (cell.Format.VerticalMerge != VerticalMerge.Restart)
                     continue;
 
                 int span = 1;
                 for (int below = index + 1; below < table.Rows.Count; below++)
                 {
-                    if (Neighbour(table.Rows[below], cell.Column)?.Format.VerticalMerge != VerticalMerge.Continue)
+                    if (Neighbour(table.Rows[below], cell.Column)?.VerticalMerge != VerticalMerge.Continue)
                         break;
 
                     span++;
@@ -272,14 +309,15 @@ internal sealed class TableLayouter
     }
 
     /// <summary>The cell that covers a grid column in a row, following the spans across it.</summary>
-    private static TableCell? Neighbour(TableRow row, int column)
+    private TableCellFormat? Neighbour(TableRow row, int column)
     {
-        int at = Math.Max(0, row.Format.GridBefore ?? 0);
+        int at = Math.Max(0, _context.Resolver.ResolveTableRowFormat(row).GridBefore ?? 0);
         foreach (TableCell cell in row.Cells)
         {
-            int span = Math.Max(1, cell.Format.GridSpan ?? 1);
+            TableCellFormat format = _context.Resolver.ResolveTableCellFormat(cell);
+            int span = Math.Max(1, format.GridSpan ?? 1);
             if (column >= at && column < at + span)
-                return cell;
+                return format;
 
             at += span;
         }
@@ -326,20 +364,20 @@ internal sealed class TableLayouter
     }
 
     /// <summary>The height a row asks for, which may be a floor or an exact figure.</summary>
-    private static double Stated(RowBox row, double natural) => row.Source.Format switch
+    private static double Stated(RowBox row, double natural) => row.Format switch
     {
         { HeightRule: HeightRule.Exact, Height: { } exact } => Math.Max(1, exact.Points),
         { HeightRule: HeightRule.AtLeast, Height: { } least } => Math.Max(least.Points, natural),
-        { Height: { } stated } when row.Source.Format.HeightRule is null => Math.Max(stated.Points, natural),
+        { Height: { } stated } when row.Format.HeightRule is null => Math.Max(stated.Points, natural),
         _ => Math.Max(1, natural),
     };
 
-    private static double Offset(Table table, double available, double width)
+    private static double Offset(TableFormat format, double available, double width)
     {
-        if (table.Format.Indent is { Unit: WidthUnit.Twips } indent)
+        if (format.Indent is { Unit: WidthUnit.Twips } indent)
             return Math.Max(0, indent.Length.Points);
 
-        return (table.Format.Alignment ?? TableAlignment.Left) switch
+        return (format.Alignment ?? TableAlignment.Left) switch
         {
             TableAlignment.Center => Math.Max(0, (available - width) / 2),
             TableAlignment.Right => Math.Max(0, available - width),
@@ -347,10 +385,10 @@ internal sealed class TableLayouter
         };
     }
 
-    private static CellPadding PaddingOf(Table table, TableCell cell)
+    private static CellPadding PaddingOf(TableFormat table, TableCellFormat cell)
     {
-        CellMargins? margins = cell.Format.Margins;
-        CellMargins? defaults = table.Format.CellMargins;
+        CellMargins? margins = cell.Margins;
+        CellMargins? defaults = table.CellMargins;
         CellPadding fallback = CellPadding.Default;
 
         return new CellPadding(
@@ -366,9 +404,9 @@ internal sealed class TableLayouter
         }
     }
 
-    private PdfColor? FillOf(Table table, TableCell cell)
+    private PdfColor? FillOf(TableFormat table, TableCellFormat cell)
     {
-        Shading? shading = cell.Format.Shading ?? table.Format.Shading;
+        Shading? shading = cell.Shading ?? table.Shading;
         if (shading is null || shading.IsEmpty || shading.Pattern == ShadingPattern.Nil)
             return null;
 
@@ -391,10 +429,11 @@ internal sealed class TableLayouter
 
         foreach (TableRow row in table.Rows)
         {
-            int column = Math.Max(0, row.Format.GridBefore ?? 0);
+            int column = Math.Max(0, _context.Resolver.ResolveTableRowFormat(row).GridBefore ?? 0);
             foreach (TableCell cell in row.Cells)
             {
-                int span = Math.Max(1, cell.Format.GridSpan ?? 1);
+                TableCellFormat cellFormat = _context.Resolver.ResolveTableCellFormat(cell);
+                int span = Math.Max(1, cellFormat.GridSpan ?? 1);
                 if (span == 1 && column < count)
                 {
                     (double least, double most) = Wanted(cell, available);
@@ -418,7 +457,10 @@ internal sealed class TableLayouter
     {
         double minimum = 0;
         double maximum = 0;
-        CellPadding padding = CellPadding.Default;
+        Table table = cell.Row?.Table ?? throw new InvalidOperationException("A measured cell must belong to a table.");
+        CellPadding padding = PaddingOf(
+            _context.Resolver.ResolveTableFormat(table),
+            _context.Resolver.ResolveTableCellFormat(cell));
 
         _rehearse(true);
         try

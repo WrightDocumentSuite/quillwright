@@ -26,6 +26,16 @@ internal sealed partial class PageComposer
         for (int index = 0; index < box.Rows.Count;)
         {
             RowBox row = box.Rows[index];
+
+            // Word records lastRenderedPageBreak inside the first run of a cell, but the page
+            // boundary belongs before the whole row.  Moving the row here avoids drawing one
+            // cell on the old page and replaying it on the new one.
+            if (row.StartsNewPage && _pageHasContent)
+            {
+                NewColumn();
+                Repeat(box, headers);
+            }
+
             double x = CurrentLeft + box.Offset;
 
             // Whatever notes the row owes have to come out of the page before the row is offered
@@ -145,7 +155,7 @@ internal sealed partial class PageComposer
     {
         RowBox row = box.Rows[index];
         double top = _cursor;
-        bool mirrored = box.Source.Format.RightToLeft == true;
+        bool mirrored = box.Format.RightToLeft == true;
 
         foreach (CellBox cell in row.Cells)
         {

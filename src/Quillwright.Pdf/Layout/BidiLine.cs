@@ -22,6 +22,8 @@ internal static class BidiLine
     {
         ArgumentNullException.ThrowIfNull(line);
 
+        ResolveCommentDirections(line.Fragments, baseRightToLeft);
+
         bool any = baseRightToLeft;
         foreach (InlineFragment fragment in line.Fragments)
             any |= fragment is TextFragment { RightToLeft: true };
@@ -54,5 +56,41 @@ internal static class BidiLine
         }
     }
 
-    private static bool IsRightToLeft(InlineFragment fragment) => fragment is TextFragment { RightToLeft: true };
+    private static bool IsRightToLeft(InlineFragment fragment) => fragment is
+        TextFragment { RightToLeft: true } or CommentFragment { RightToLeft: true };
+
+    /// <summary>
+    /// A Word comment reference is the logical end of the range before it. Giving the zero-width
+    /// marker that run's direction keeps an RTL range's endpoint at its visual left edge rather
+    /// than at the paragraph base direction's side. At the start of a line the next text run is
+    /// the best available neighbour; a line containing no text falls back to its base direction.
+    /// </summary>
+    private static void ResolveCommentDirections(IReadOnlyList<InlineFragment> fragments, bool baseRightToLeft)
+    {
+        bool? preceding = null;
+        for (int i = 0; i < fragments.Count; i++)
+        {
+            switch (fragments[i])
+            {
+                case TextFragment text:
+                    preceding = text.RightToLeft;
+                    break;
+
+                case CommentFragment comment:
+                    comment.RightToLeft = preceding ?? FollowingTextDirection(fragments, i + 1) ?? baseRightToLeft;
+                    break;
+            }
+        }
+    }
+
+    private static bool? FollowingTextDirection(IReadOnlyList<InlineFragment> fragments, int from)
+    {
+        for (int i = from; i < fragments.Count; i++)
+        {
+            if (fragments[i] is TextFragment text)
+                return text.RightToLeft;
+        }
+
+        return null;
+    }
 }

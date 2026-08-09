@@ -88,6 +88,19 @@ internal sealed class TabFragment : InlineFragment
     public bool IsBar { get; set; }
 }
 
+/// <summary>
+/// A zero-width comment endpoint carried through line breaking so its PDF annotation lands on the
+/// page and line where Word put the comment reference.
+/// </summary>
+internal sealed class CommentFragment : InlineFragment
+{
+    /// <summary>The comment whose thread starts here.</summary>
+    public required Comment Comment { get; init; }
+
+    /// <summary>Whether this marker participates in a right-to-left run.</summary>
+    public bool RightToLeft { get; set; }
+}
+
 /// <summary>A picture drawn inside the line.</summary>
 internal sealed class ImageFragment : InlineFragment
 {

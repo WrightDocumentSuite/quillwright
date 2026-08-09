@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Quillwright.Diagnostics;
 using Quillwright.Model;
 using Quillwright.Primitives;
 
@@ -22,7 +23,9 @@ internal static class DocPictureReader
     /// <summary>Reads the picture at an offset, or <see langword="null"/> when there is none.</summary>
     /// <param name="data">The data stream.</param>
     /// <param name="offset">Offset the character's properties named.</param>
-    public static Picture? Read(byte[] data, int offset)
+    /// <param name="loadBudget">Optional counters for decoded image payloads.</param>
+    public static Picture? Read(
+        byte[] data, int offset, DocumentLoadBudgetState? loadBudget = null)
     {
         if (offset < 0 || offset + HeaderBytes > data.Length)
             return null;
@@ -35,7 +38,8 @@ internal static class DocPictureReader
         short width = BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(offset + 28));
         short height = BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan(offset + 30));
 
-        ImageData? image = OfficeArtBlip.FindFirst(data, offset + header, offset + total, delayed: null);
+        ImageData? image = OfficeArtBlip.FindFirst(
+            data, offset + header, offset + total, delayed: null, loadBudget);
         return image is null
             ? null
             : new Picture

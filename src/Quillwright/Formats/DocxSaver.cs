@@ -44,7 +44,8 @@ internal static partial class DocxSaver
             // Every part that describes comments keys off an identifier that also appears
             // somewhere else — on the comment's own last paragraph, or in the sibling part —
             // so all of them are settled before the first of the four is written.
-            Dictionary<Comment, string> threads = CommentThreadWriter.Prepare(document, plan.WritesCommentIds);
+            Dictionary<Comment, string> threads = CommentThreadWriter.Prepare(
+                document, plan.WritesCommentThreads || plan.WritesCommentIds);
             Dictionary<Comment, string> durable = CommentIdsPart.Prepare(document, threads);
             await WriteCommentsAsync(package, document, plan, cancellationToken).ConfigureAwait(false);
             await WriteCommentThreadsAsync(package, document, plan, threads, cancellationToken).ConfigureAwait(false);
@@ -119,7 +120,10 @@ internal static partial class DocxSaver
 
             // The properties of the last section live at the end of the body rather than
             // inside a paragraph, which is what marks it as the final one.
-            SectionWriter.Write(writer, document.Sections.Last.Properties, BuildSectionContext(document.Sections.Last, plan));
+            SectionWriter.Write(
+                writer,
+                document.Sections.Last.Properties,
+                BuildSectionContext(document.Sections.Last, plan, SectionStart.NextPage));
             writer.WriteRaw("</w:body></w:document>"u8);
         }
     }
@@ -153,7 +157,7 @@ internal static partial class DocxSaver
         ResolvePicture = picture => plan.RelationshipFor(picture, plan.MainPartPath),
         ResolveHyperlink = link => plan.RelationshipFor(link, plan.MainPartPath),
         SectionBreakAt = paragraph => paragraph.SectionBreak is { } properties
-            ? (properties, BuildSectionContext(FindSection(document, properties), plan))
+            ? SectionBreak(document, properties, plan)
             : null,
     };
 
@@ -171,9 +175,34 @@ internal static partial class DocxSaver
     private static Section FindSection(WordDocument document, SectionProperties properties) =>
         document.Sections.FirstOrDefault(section => ReferenceEquals(section.Properties, properties)) ?? document.Sections.Last;
 
-    private static SectionWriteContext BuildSectionContext(Section section, SavePlan plan)
+    private static (SectionProperties Properties, SectionWriteContext Context) SectionBreak(
+        WordDocument document,
+        SectionProperties properties,
+        SavePlan plan)
     {
-        var context = new SectionWriteContext();
+        Section section = FindSection(document, properties);
+        int index = -1;
+        for (int i = 0; i < document.Sections.Count; i++)
+        {
+            if (ReferenceEquals(document.Sections[i], section))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        SectionStart followingStart = index >= 0 && index + 1 < document.Sections.Count
+            ? document.Sections[index + 1].Properties.Start
+            : SectionStart.NextPage;
+        return (properties, BuildSectionContext(section, plan, followingStart));
+    }
+
+    private static SectionWriteContext BuildSectionContext(
+        Section section,
+        SavePlan plan,
+        SectionStart? followingStart = null)
+    {
+        var context = new SectionWriteContext { FollowingSectionStart = followingStart };
         foreach ((HeaderFooterKind kind, HeaderFooter content) in section.Headers.Defined)
             context.References.Add((false, kind, plan.RelationshipFor(content)));
         foreach ((HeaderFooterKind kind, HeaderFooter content) in section.Footers.Defined)

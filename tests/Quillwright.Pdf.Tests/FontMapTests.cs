@@ -114,4 +114,26 @@ public sealed class FontMapTests
             Assert.Empty(diagnostics.SubstitutedFonts);
         }
     }
+
+    [Fact]
+    public void WindowsOfficeAndPdfAliasesResolveToTimesNewRomanWithoutSubstitution()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "This regression covers Windows font aliases.");
+        string regular = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Fonts", "times.ttf");
+        Assert.SkipWhen(!File.Exists(regular), "Times New Roman is not installed.");
+
+        (FontMap map, PdfExportDiagnostics diagnostics, PdfDocument pdf) = Create();
+        using (pdf)
+        {
+            var cyrillicAlias = Assert.IsType<EmbeddedTrueTypeFont>(
+                map.Resolve("Times New Roman CYR", bold: false, italic: false));
+            var pdfAlias = Assert.IsType<EmbeddedTrueTypeFont>(
+                map.Resolve("Times-Roman", bold: true, italic: false));
+
+            Assert.Equal("Times New Roman", cyrillicAlias.Program.FamilyName);
+            Assert.Equal("Times New Roman", pdfAlias.Program.FamilyName);
+            Assert.Empty(diagnostics.SubstitutedFonts);
+        }
+    }
 }

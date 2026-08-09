@@ -43,9 +43,9 @@ internal static partial class DocxSaver
 
     /// <summary>
     /// Writes the part that says which comments are replies to which, and which have been
-    /// marked resolved. It is written only when there is something to say, because it names
-    /// comments by paragraph identifier and giving one to every comment otherwise would
-    /// change documents that never asked for threading.
+    /// marked resolved. A new document gets it only when there is something to say. A loaded
+    /// document that already carried the part gets it rebuilt even after the last reply or
+    /// resolved state is cleared, so preserved XML cannot restore stale state.
     /// </summary>
     private static async ValueTask WriteCommentThreadsAsync(
         OpcPackage package,
@@ -54,7 +54,7 @@ internal static partial class DocxSaver
         Dictionary<Comment, string> threads,
         CancellationToken cancellationToken)
     {
-        if (threads.Count == 0)
+        if (!plan.WritesCommentThreads)
             return;
 
         string path = plan.PathFor(DocxSchema.RelCommentsExtended, DocxSchema.PartCommentsExtended);

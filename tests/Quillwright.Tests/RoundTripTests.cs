@@ -1,6 +1,9 @@
 using Quillwright.Model;
 using Quillwright.Primitives;
 using Quillwright.Styles;
+using System.IO.Compression;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Quillwright.Tests;
 
@@ -101,10 +104,51 @@ public class RoundTripTests
         WordDocument reloaded = await DocumentFixture.RoundTripAsync(document, "two sections");
 
         Assert.Equal(2, reloaded.Sections.Count);
+        Assert.Single(reloaded.Sections[0].Blocks);
+        Assert.True(reloaded.Sections[0].Blocks.Paragraphs.Single().IsSectionBreakCarrier);
         Assert.Equal("first section", reloaded.Sections[0].Blocks.Paragraphs.First().Text);
         Assert.Equal("second section", reloaded.Sections[1].Blocks.Paragraphs.First().Text);
         Assert.Equal(PageOrientation.Landscape, reloaded.Sections[1].Properties.Orientation);
         Assert.True(reloaded.Sections[1].Properties.PageWidth > reloaded.Sections[1].Properties.PageHeight);
+    }
+
+    [Fact]
+    public async Task AnEmptySectionCarrierRemainsInTheEditableModel()
+    {
+        WordDocument document = WordDocument.Create();
+        document.Sections[0].AddParagraph();
+        document.Sections.Add(SectionStart.NextPage).AddParagraph("second");
+
+        WordDocument reloaded = await DocumentFixture.RoundTripAsync(document, "empty section carrier");
+
+        Paragraph carrier = reloaded.Sections[0].Blocks.Paragraphs.Single();
+        Assert.True(carrier.IsEmpty);
+        Assert.True(carrier.IsSectionBreakCarrier);
+    }
+
+    [Fact]
+    public async Task SectionStartIsWrittenOnThePrecedingSectionProperties()
+    {
+        WordDocument document = WordDocument.Create();
+        document.Sections[0].AddParagraph("first");
+        document.Sections.Add(SectionStart.Continuous).AddParagraph("second");
+        document.Sections.Add(SectionStart.OddPage).AddParagraph("third");
+
+        using MemoryStream package = await DocumentFixture.SaveAsync(document);
+        using (var archive = new ZipArchive(package, ZipArchiveMode.Read, leaveOpen: true))
+        using (Stream stream = archive.GetEntry("word/document.xml")!.Open())
+        using (var reader = new StreamReader(stream, Encoding.UTF8))
+        {
+            string xml = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
+            MatchCollection types = Regex.Matches(xml, "<w:type w:val=\"([^\"]+)\"/>");
+            Assert.Equal(new[] { "continuous", "oddPage" }, types.Select(match => match.Groups[1].Value));
+        }
+
+        package.Position = 0;
+        WordDocument reloaded = await WordDocument.LoadAsync(package, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(
+            new[] { SectionStart.NextPage, SectionStart.Continuous, SectionStart.OddPage },
+            reloaded.Sections.Select(section => section.Properties.Start));
     }
 
     [Fact]
@@ -119,6 +163,40 @@ public class RoundTripTests
 
         Assert.Equal("page header", reloaded.Sections[0].Headers.Default?.GetText());
         Assert.Equal("page footer", reloaded.Sections[0].Footers.Default?.GetText());
+    }
+
+    [Fact]
+    public async Task GeneratedFixedLayoutTextBoxesAndLinesSurviveTheRoundTrip()
+    {
+        WordDocument document = WordDocument.Create();
+        Paragraph anchor = document.Sections[0].AddParagraph();
+        var content = new TextBox();
+        content.AddParagraph("editable fixed text");
+        var placement = new PictureAnchor
+        {
+            HorizontalFrom = AnchorOrigin.Page,
+            VerticalFrom = AnchorOrigin.Page,
+            OffsetX = Length.FromPoints(40),
+            OffsetY = Length.FromPoints(60),
+            Wrapping = TextWrapping.None,
+        };
+        anchor.AppendObject(Shape.CreateTextBox(
+            Length.FromPoints(200), Length.FromPoints(20), content, placement));
+        anchor.AppendObject(Shape.CreateLine(
+            Length.FromPoints(200), Length.FromPoints(0.05),
+            BorderLine.Single(Length.FromPoints(1), WordColor.Black), placement));
+
+        WordDocument reloaded = await DocumentFixture.RoundTripAsync(document, "generated fixed layout drawings");
+        Shape[] shapes = [.. reloaded.Paragraphs.SelectMany(paragraph => paragraph.Objects)
+            .Select(anchored => anchored.Object).OfType<Shape>()];
+
+        Assert.Equal(2, shapes.Length);
+        Shape textBox = Assert.Single(shapes, shape => shape.GetText() == "editable fixed text");
+        Assert.Equal(Length.Zero, textBox.InsetLeft);
+        Assert.Equal(Length.Zero, textBox.InsetRight);
+        Assert.Equal(Length.Zero, textBox.InsetTop);
+        Assert.Equal(Length.Zero, textBox.InsetBottom);
+        Assert.Contains(shapes, shape => shape.IsLine);
     }
 
     [Fact]

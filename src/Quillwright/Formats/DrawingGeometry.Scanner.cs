@@ -186,6 +186,14 @@ internal sealed partial class DrawingGeometry
                     break;
 
                 case "bodyPr" when xml.NamespaceURI == DocxSchema.NsWordShape:
+                    if (XmlHelp.Attr(xml, "lIns") is { } leftInset)
+                        found.TextInsetLeft = Length.FromEmu(ParseLong(leftInset));
+                    if (XmlHelp.Attr(xml, "rIns") is { } rightInset)
+                        found.TextInsetRight = Length.FromEmu(ParseLong(rightInset));
+                    if (XmlHelp.Attr(xml, "tIns") is { } topInset)
+                        found.TextInsetTop = Length.FromEmu(ParseLong(topInset));
+                    if (XmlHelp.Attr(xml, "bIns") is { } bottomInset)
+                        found.TextInsetBottom = Length.FromEmu(ParseLong(bottomInset));
                     found.TextFlow = XmlHelp.Attr(xml, "vert") switch
                     {
                         "vert" or "eaVert" => Styles.TextDirection.TopToBottomRightToLeft,
@@ -198,6 +206,10 @@ internal sealed partial class DrawingGeometry
 
                 case "spPr" when xml.NamespaceURI == DocxSchema.NsWordShape:
                     _shapeProperties = xml.Depth;
+                    break;
+
+                case "prstGeom" when _shapeProperties >= 0 && xml.Depth == _shapeProperties + 1:
+                    found.IsLine = XmlHelp.Attr(xml, "prst") is "line" or "straightConnector1";
                     break;
 
                 case "blipFill" when _shapeProperties >= 0 && xml.Depth == _shapeProperties + 1:

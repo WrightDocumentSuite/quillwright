@@ -70,18 +70,26 @@ await doc.SaveAsync("agreement.docx");
   formatting, links, bookmarks, tracked-change views, lists, tables, pictures and notes into
   deterministic GitHub Markdown or CommonMark; `MarkdownImporter.Import` reads CommonMark and
   the GitHub extensions back into a real document, onto the same styles the exporter
-  recognises, so the two directions are inverses as far as the formats overlap. Every fallback
-  is named in diagnostics. See the [export](docs/markdown-export.md) and
+  recognises. The two directions share a documented semantic subset rather than promising a
+  lossless round trip; export-only fallbacks are called out in the format guides. Every fallback
+  emitted by the exporter is named in diagnostics. See the [export](docs/markdown-export.md) and
   [import](docs/markdown-import.md) guides.
 - **HTML both ways, parsed to the standard.** `document.ToHtml()` writes one self-contained
   page for a web preview — semantic elements first, CSS only for what HTML has no element for,
   tables with their merges, real nested lists, footnotes linked both ways, tracked changes as
-  `ins`/`del` on request. `HtmlImporter.Import` reads it back, and reads the HTML that editors
-  and language models produce: the parser behind it is WHATWG §13.2 itself — all 84 tokenizer
+  `ins`/`del` on request. `HtmlImporter.Import` reads the supported semantic subset back, and
+  reads the HTML that editors and language models produce: the parser behind it is WHATWG §13.2
+  itself — all 84 tokenizer
   states, all 21 insertion modes, the adoption agency algorithm, foster parenting, the 2229
   named character references — so `<p>1<b>2<i>3</b>4</i>5` comes out the way a browser makes
   it, which is checked against one. See the [export](docs/html-export.md) and
   [import](docs/html-import.md) guides.
+- **RTF as an explicit semantic conversion.** `Quillwright.Rtf` reads the RTF 1.9.1 group and
+  destination grammar directly, including Unicode fallbacks, per-font code pages, font and
+  colour tables, direct character and paragraph formatting and tab stops. Its deterministic
+  writer emits the same supported subset, and both directions return diagnostics for every
+  deliberate approximation. See the [import](docs/rtf-import.md) and
+  [export](docs/rtf-export.md) guides.
 - **Macros you can read.** `document.Macros` decodes the VBA project of a `.docm` or a `.doc`
   into module names, source, the libraries it references and whether it was locked. Useful for
   auditing a document you did not write; a password on the project does not hide any of it.
@@ -166,10 +174,11 @@ await markdown.SaveAsync("quarterly-markdown");
 
 | Package | What it adds |
 | --- | --- |
-| `Quillwright` | The model, reader/writer, streaming, editing and Markdown export |
+| `Quillwright` | The model, reader/writer, streaming, editing, Markdown and HTML |
 | `Quillwright.Templates` | Typed templating and its incremental source generator |
 | `Quillwright.Doc` | Reading and writing Word 97-2003 `.doc` files |
 | `Quillwright.Pdf` | Rendering to PDF on top of Inkwright: pagination, tables, tagging |
+| `Quillwright.Rtf` | Semantic import and export of the supported RTF 1.9.1 subset |
 
 ## Documentation
 
@@ -180,6 +189,7 @@ await markdown.SaveAsync("quarterly-markdown");
 - [The document model](docs/model.md)
 - [Styles and numbering](docs/styles.md)
 - [Streaming](docs/streaming.md)
+- [Loading untrusted input](docs/loading-untrusted-input.md)
 - [Editing, search and revisions](docs/editing.md)
 - [Fields](docs/fields.md)
 - [Equations](docs/math.md)
@@ -192,6 +202,8 @@ await markdown.SaveAsync("quarterly-markdown");
 - [Importing Markdown](docs/markdown-import.md)
 - [Exporting HTML](docs/html-export.md)
 - [Importing HTML](docs/html-import.md)
+- [Importing RTF](docs/rtf-import.md)
+- [Exporting RTF](docs/rtf-export.md)
 - [Macros](docs/macros.md)
 - [Benchmarks](docs/benchmarks.md)
 - [Running the tests](docs/testing.md)
@@ -223,7 +235,8 @@ signer's key, each covered part against its digest — and `DocumentSigner` sign
 package the same way Word does; whether to trust a certificate stays a policy the caller
 supplies, and no XAdES qualifying properties are written. Encryption is
 read four ways and written one: a package is locked with AES-256 and a `.doc` with the RC4 the
-format has. RTF and ODT are not read or written; Markdown and HTML are, both ways. Writing `.doc`
+format has. RTF, Markdown and HTML are semantic conversions in both directions; ODT is not
+read or written. Writing `.doc`
 is a conversion rather than a round trip:
 the format has no revisions and no content controls, so those are written as their accepted or
 unwrapped form, with a warning naming what changed. Two formats that never appear inside a

@@ -44,6 +44,9 @@ internal enum InlineKind
 
     /// <summary>The mark that stands for a note, and the note it owes the page.</summary>
     NoteReference,
+
+    /// <summary>The invisible endpoint at which an interactive PDF comment is anchored.</summary>
+    CommentReference,
 }
 
 /// <summary>
@@ -95,6 +98,9 @@ internal readonly struct InlineItem
 
     /// <summary>The note a reference stands for, and the number it prints.</summary>
     public NoteMark? Note { get; init; }
+
+    /// <summary>The Word comment an invisible comment reference points at.</summary>
+    public Comment? Comment { get; init; }
 
     /// <summary>Whether a text piece reads right-to-left.</summary>
     public bool RightToLeft { get; init; }

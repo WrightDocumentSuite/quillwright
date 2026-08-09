@@ -13,11 +13,20 @@ internal sealed class NumberingCounter
 {
     private const int Depth = 9;
 
-    private readonly NumberingDefinitions _numbering;
+    private readonly NumberingResolver _numbering;
     private readonly Dictionary<int, int[]> _counters = [];
     private readonly Dictionary<int, bool[]> _started = [];
 
-    public NumberingCounter(NumberingDefinitions numbering) => _numbering = numbering;
+    public NumberingCounter(NumberingDefinitions numbering)
+        : this(new NumberingResolver(numbering))
+    {
+    }
+
+    public NumberingCounter(NumberingResolver numbering)
+    {
+        ArgumentNullException.ThrowIfNull(numbering);
+        _numbering = numbering;
+    }
 
     public NumberLabel? Next(ParagraphFormat format) => Resolve(format, advance: true);
 
@@ -73,7 +82,7 @@ internal sealed class NumberingCounter
 
     private int Start(int id, int level)
     {
-        NumberingInstance? instance = _numbering.Instances.FirstOrDefault(candidate => candidate.Id == id);
+        NumberingInstance? instance = _numbering.FindInstance(id);
         NumberingLevelOverride? over = instance?.Overrides.FirstOrDefault(candidate => candidate.Level == level);
         return over?.StartOverride ?? _numbering.ResolveLevel(id, level)?.Start ?? 1;
     }

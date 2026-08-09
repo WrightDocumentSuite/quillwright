@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using Quillwright.Diagnostics;
 using Quillwright.Model;
 using Quillwright.Styles;
 
@@ -19,13 +20,17 @@ internal sealed class MarkdownInlineParser
 {
     private readonly IReadOnlyDictionary<string, (string Url, string? Title)> _definitions;
     private readonly Func<string, string?, int, ImageData?> _resolveImage;
+    private readonly DocumentLoadBudgetState _budget;
+    private int _parseDepth;
 
     internal MarkdownInlineParser(
         IReadOnlyDictionary<string, (string Url, string? Title)> definitions,
-        Func<string, string?, int, ImageData?> resolveImage)
+        Func<string, string?, int, ImageData?> resolveImage,
+        DocumentLoadBudgetState budget)
     {
         _definitions = definitions;
         _resolveImage = resolveImage;
+        _budget = budget;
     }
 
     /// <summary>Parses inline text into a paragraph.</summary>
@@ -110,15 +115,19 @@ internal sealed class MarkdownInlineParser
 
     private List<Node> ParseNodes(string text)
     {
-        var nodes = new List<Node>();
-        var literal = new StringBuilder();
-        int i = 0;
+        _parseDepth++;
+        _budget.EnsureMarkupDepth(_parseDepth);
+        try
+        {
+            var nodes = new List<Node>();
+            var literal = new StringBuilder();
+            int i = 0;
 
         void FlushLiteral()
         {
             if (literal.Length > 0)
             {
-                nodes.Add(new TextNode(literal.ToString()));
+                AddNode(nodes, new TextNode(literal.ToString()));
                 literal.Clear();
             }
         }
@@ -135,7 +144,7 @@ internal sealed class MarkdownInlineParser
 
                 case '\n':
                     FlushLiteral();
-                    nodes.Add(new BreakNode());
+                    AddNode(nodes, new BreakNode());
                     i++;
                     continue;
 
@@ -151,14 +160,15 @@ internal sealed class MarkdownInlineParser
                     }
 
                     FlushLiteral();
-                    nodes.Add(new CodeNode(CodeContent(text[(i + open)..close])));
+                    AddNode(nodes, new CodeNode(CodeContent(text[(i + open)..close])));
                     i = close + open;
                     continue;
                 }
 
                 case '<' when Autolink(text, i) is { } autolink:
                     FlushLiteral();
-                    nodes.Add(new LinkNode([new TextNode(autolink.Text)], autolink.Url, null));
+                    _budget.AddMarkupNode(); // the link's text child
+                    AddNode(nodes, new LinkNode([new TextNode(autolink.Text)], autolink.Url, null));
                     i = autolink.End;
                     continue;
 
@@ -172,7 +182,7 @@ internal sealed class MarkdownInlineParser
                     int count = CountRun(text, i, c);
                     (bool open, bool close) = Flanking(text, i, count, c);
                     FlushLiteral();
-                    nodes.Add(new DelimNode(c, count, open, close));
+                    AddNode(nodes, new DelimNode(c, count, open, close));
                     i += count;
                     continue;
                 }
@@ -182,7 +192,7 @@ internal sealed class MarkdownInlineParser
                     int count = CountRun(text, i, '~');
                     (bool open, bool close) = Flanking(text, i, count, '~');
                     FlushLiteral();
-                    nodes.Add(new DelimNode('~', count, open, close));
+                    AddNode(nodes, new DelimNode('~', count, open, close));
                     i += count;
                     continue;
                 }
@@ -200,7 +210,7 @@ internal sealed class MarkdownInlineParser
                     }
 
                     FlushLiteral();
-                    nodes.Add(parsed.Node);
+                    AddNode(nodes, parsed.Node);
                     i = parsed.End;
                     continue;
                 }
@@ -212,8 +222,19 @@ internal sealed class MarkdownInlineParser
             }
         }
 
-        FlushLiteral();
-        return nodes;
+            FlushLiteral();
+            return nodes;
+        }
+        finally
+        {
+            _parseDepth--;
+        }
+    }
+
+    private void AddNode(List<Node> nodes, Node node)
+    {
+        _budget.AddMarkupNode();
+        nodes.Add(node);
     }
 
     /// <summary>A complete bracket construct at <paramref name="open"/>, or nothing.</summary>
@@ -493,8 +514,9 @@ internal sealed class MarkdownInlineParser
     /// Pairs delimiter runs into emphasis, strong emphasis and strikethrough, closers left to
     /// right against the nearest matching opener, shedding two markers a time while they last.
     /// </summary>
-    private static void ProcessEmphasis(List<Node> nodes)
+    private void ProcessEmphasis(List<Node> nodes, int depth = 1)
     {
+        _budget.EnsureMarkupDepth(depth);
         for (int closer = 0; closer < nodes.Count; closer++)
         {
             if (nodes[closer] is not DelimNode closing || !closing.CanClose)
@@ -518,6 +540,7 @@ internal sealed class MarkdownInlineParser
             int used = strike ? 2 : Math.Min(Math.Min(opening.Count, closing.Count), 2);
 
             var children = new List<Node>(nodes.GetRange(opener + 1, closer - opener - 1));
+            _budget.AddMarkupNode();
             var span = new SpanNode(children)
             {
                 Bold = !strike && used == 2,
@@ -545,16 +568,20 @@ internal sealed class MarkdownInlineParser
         for (int i = 0; i < nodes.Count; i++)
         {
             if (nodes[i] is DelimNode leftover)
+            {
+                _budget.AddMarkupNode();
                 nodes[i] = new TextNode(new string(leftover.Kind, leftover.Count));
+            }
             else if (nodes[i] is SpanNode span)
-                ProcessEmphasis(span.Children);
+                ProcessEmphasis(span.Children, depth + 1);
             else if (nodes[i] is LinkNode link)
-                ProcessEmphasis(link.Children);
+                ProcessEmphasis(link.Children, depth + 1);
         }
     }
 
-    private void Emit(Paragraph paragraph, List<Node> nodes, RunFormat format, int line)
+    private void Emit(Paragraph paragraph, List<Node> nodes, RunFormat format, int line, int depth = 1)
     {
+        _budget.EnsureMarkupDepth(depth);
         foreach (Node node in nodes)
         {
             switch (node)
@@ -581,13 +608,13 @@ internal sealed class MarkdownInlineParser
                         Bold = span.Bold ? true : format.Bold,
                         Italic = span.Italic ? true : format.Italic,
                         Strike = span.Strike ? true : format.Strike,
-                    }, line);
+                    }, line, depth + 1);
                     break;
 
                 case LinkNode link:
                 {
                     int start = paragraph.TextLength;
-                    Emit(paragraph, link.Children, format, line);
+                    Emit(paragraph, link.Children, format, line, depth + 1);
                     var hyperlink = new Hyperlink { Tooltip = link.Title };
                     if (link.Url.StartsWith('#'))
                         hyperlink.Anchor = link.Url[1..];
@@ -615,8 +642,9 @@ internal sealed class MarkdownInlineParser
         }
     }
 
-    private static void Flatten(List<Node> nodes, StringBuilder plain)
+    private void Flatten(List<Node> nodes, StringBuilder plain, int depth = 1)
     {
+        _budget.EnsureMarkupDepth(depth);
         foreach (Node node in nodes)
         {
             switch (node)
@@ -631,10 +659,10 @@ internal sealed class MarkdownInlineParser
                     plain.Append(' ');
                     break;
                 case SpanNode span:
-                    Flatten(span.Children, plain);
+                    Flatten(span.Children, plain, depth + 1);
                     break;
                 case LinkNode link:
-                    Flatten(link.Children, plain);
+                    Flatten(link.Children, plain, depth + 1);
                     break;
                 case ImageNode image:
                     plain.Append(image.Alt);

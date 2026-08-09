@@ -16,6 +16,27 @@ managed code, with no dependency on Office, on Windows, or on a conversion servi
 across and what does not is below; how it compares with the other formats is in
 [conformance.md](conformance.md).
 
+The default resource budget applies to the complete CFB file, its directory and streams, decoded
+images and reconstructed object-pool payloads. Override it without an unbounded `ReadAllBytes`
+through `DocImportOptions`:
+
+```csharp
+var options = new DocImportOptions
+{
+    Password = password,
+    Budget = DocumentLoadBudget.Default with { MaxInputBytes = 64 * 1024 * 1024 },
+};
+WordDocument document = await DocReader.LoadWithOptionsAsync("archive.doc", options);
+```
+
+For a document already held in memory, use `DocReader.LoadWithOptions(bytes, options)`. The
+distinct options method names preserve source compatibility with existing calls such as
+`DocReader.Load(bytes, null)`, where `null` is the optional password.
+
+See [loading-untrusted-input.md](loading-untrusted-input.md) for every limit and the common
+`DocumentLoadLimitException` contract. The existing `LoadAsync(path, password)` and
+`Load(bytes, password)` overloads keep their API and use the default budget.
+
 ## How the format works, and why reading it is a join
 
 A Word 97-2003 file keeps the text in one long stream and everything about it somewhere else.

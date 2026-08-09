@@ -91,7 +91,15 @@ internal static class SignatureReader
         OpcPackage package, XElement root, string path, CancellationToken cancellationToken)
     {
         X509Certificate2? certificate = Certificate(root);
-        List<SignedPart> parts = await ManifestAsync(package, root, cancellationToken).ConfigureAwait(false);
+        OpcSignatureStructure? structure = Structure(root);
+        bool? packageObjectMatches = structure is not null
+            ? await SignatureVerifier.CheckReferenceAsync(
+                package, structure.PackageReference, structure.Identifiers, cancellationToken).ConfigureAwait(false)
+            : null;
+
+        List<SignedPart> parts = structure is not null && packageObjectMatches == true
+            ? await ManifestAsync(package, structure.Manifest, structure.Identifiers, cancellationToken).ConfigureAwait(false)
+            : [];
 
         bool modified = parts.Exists(static part => part.Matches == false);
         bool complete = parts.Count > 0 && parts.TrueForAll(static part => part.Matches == true);
@@ -108,8 +116,50 @@ internal static class SignatureReader
                 : complete ? SignatureStatus.PartsUnchanged
                 : SignatureStatus.Unverified,
             ValueStatus = SignatureVerifier.CheckValue(root, certificate),
-            SignedInfoIntact = await SignedInfoAsync(package, root, cancellationToken).ConfigureAwait(false),
+            SignedInfoIntact = structure is not null
+                ? await SignedInfoAsync(
+                    package,
+                    structure.SignedInfo,
+                    structure.PackageReference,
+                    packageObjectMatches,
+                    structure.Identifiers,
+                    cancellationToken).ConfigureAwait(false)
+                : false,
         };
+    }
+
+    /// <summary>
+    /// Resolves the OPC signature structure once, through the same identifier map every
+    /// same-document reference uses. Ambiguous or incomplete structures are not interpreted.
+    /// </summary>
+    private static OpcSignatureStructure? Structure(XElement root)
+    {
+        IReadOnlyDictionary<string, XElement>? identifiers = SignatureVerifier.IndexIdentifiers(root);
+        XElement? signedInfo = ExactlyOne(root.Elements(Signature + "SignedInfo"));
+
+        if (identifiers is null || signedInfo is null ||
+            !identifiers.TryGetValue(PackageObjectId, out XElement? packageObject) ||
+            packageObject.Name != Signature + "Object" ||
+            !ReferenceEquals(packageObject.Parent, root) ||
+            ExactlyOne(packageObject.Elements(Signature + "Manifest")) is not { } manifest ||
+            ExactlyOne(signedInfo.Elements(Signature + "Reference").Where(
+                static reference => reference.Attribute("URI")?.Value == "#" + PackageObjectId)) is not { } packageReference)
+        {
+            return null;
+        }
+
+        return new OpcSignatureStructure(identifiers, signedInfo, packageReference, manifest);
+    }
+
+    /// <summary>Returns the only element in a sequence, without accepting the first of many.</summary>
+    private static XElement? ExactlyOne(IEnumerable<XElement> elements)
+    {
+        using IEnumerator<XElement> iterator = elements.GetEnumerator();
+        if (!iterator.MoveNext())
+            return null;
+
+        XElement element = iterator.Current;
+        return iterator.MoveNext() ? null : element;
     }
 
     /// <summary>
@@ -118,24 +168,30 @@ internal static class SignatureReader
     /// unnoticed by a check of the value alone.
     /// </summary>
     private static async ValueTask<bool?> SignedInfoAsync(
-        OpcPackage package, XElement root, CancellationToken cancellationToken)
+        OpcPackage package,
+        XElement signedInfo,
+        XElement packageReference,
+        bool? packageObjectMatches,
+        IReadOnlyDictionary<string, XElement> identifiers,
+        CancellationToken cancellationToken)
     {
-        if (root.Element(Signature + "SignedInfo") is not { } signedInfo)
-            return null;
-
-        bool? result = null;
+        bool sawReference = false;
+        bool sawUnchecked = false;
         foreach (XElement reference in signedInfo.Elements(Signature + "Reference"))
         {
-            bool? matches = await SignatureVerifier
-                .CheckReferenceAsync(package, reference, root, cancellationToken).ConfigureAwait(false);
+            sawReference = true;
+            bool? matches = ReferenceEquals(reference, packageReference)
+                ? packageObjectMatches
+                : await SignatureVerifier
+                    .CheckReferenceAsync(package, reference, identifiers, cancellationToken).ConfigureAwait(false);
 
             if (matches == false)
                 return false;
 
-            result = matches == true ? result ?? true : null;
+            sawUnchecked |= matches is null;
         }
 
-        return result;
+        return sawReference && !sawUnchecked ? true : null;
     }
 
     /// <summary>
@@ -143,14 +199,14 @@ internal static class SignatureReader
     /// cannot reproduce comes back with no answer rather than a wrong one.
     /// </summary>
     private static async ValueTask<List<SignedPart>> ManifestAsync(
-        OpcPackage package, XElement root, CancellationToken cancellationToken)
+        OpcPackage package,
+        XElement manifest,
+        IReadOnlyDictionary<string, XElement> identifiers,
+        CancellationToken cancellationToken)
     {
         var parts = new List<SignedPart>();
-        XElement? manifest = root.Elements(Signature + "Object")
-            .FirstOrDefault(static element => element.Attribute("Id")?.Value == PackageObjectId)?
-            .Element(Signature + "Manifest");
 
-        foreach (XElement reference in manifest?.Elements(Signature + "Reference") ?? [])
+        foreach (XElement reference in manifest.Elements(Signature + "Reference"))
         {
             string uri = reference.Attribute("URI")?.Value ?? string.Empty;
             int query = uri.IndexOf('?', StringComparison.Ordinal);
@@ -161,12 +217,19 @@ internal static class SignatureReader
                 DigestMethod = reference.Element(Signature + "DigestMethod")?.Attribute("Algorithm")?.Value ?? string.Empty,
                 DigestValue = reference.Element(Signature + "DigestValue")?.Value?.Trim() ?? string.Empty,
                 Matches = await SignatureVerifier
-                    .CheckReferenceAsync(package, reference, root, cancellationToken).ConfigureAwait(false),
+                    .CheckReferenceAsync(package, reference, identifiers, cancellationToken).ConfigureAwait(false),
             });
         }
 
         return parts;
     }
+
+    /// <summary>The one unambiguous OPC structure all signature checks share.</summary>
+    private sealed record OpcSignatureStructure(
+        IReadOnlyDictionary<string, XElement> Identifiers,
+        XElement SignedInfo,
+        XElement PackageReference,
+        XElement Manifest);
 
     private static X509Certificate2? Certificate(XElement root)
     {

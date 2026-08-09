@@ -98,6 +98,9 @@ internal sealed class LineBox
             int count = 0;
             for (int i = Fragments.Count - 1; i >= 0; i--)
             {
+                if (Fragments[i] is CommentFragment)
+                    continue;
+
                 if (Fragments[i] is not TextFragment text)
                     break;
 
@@ -118,7 +121,7 @@ internal sealed class LineBox
     }
 
     /// <summary>Whether the line carries nothing that would print.</summary>
-    public bool IsEmpty => Fragments.Count == 0;
+    public bool IsEmpty => !Fragments.Any(static fragment => fragment is not CommentFragment);
 }
 
 /// <summary>

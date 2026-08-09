@@ -49,6 +49,21 @@ Loading reads the package to the end and closes it, so there is no open handle b
 Anything the model does not represent — charts, embedded objects, custom XML, macros — is held
 aside and written back on save.
 
+Every load also has a finite resource budget. For uploads or other caller-controlled files,
+set the limits for the service explicitly and handle `DocumentLoadLimitException` separately
+from malformed packages:
+
+```csharp
+var options = new LoadOptions
+{
+    Budget = DocumentLoadBudget.Default with { MaxInputBytes = 32 * 1024 * 1024 },
+};
+WordDocument uploaded = await WordDocument.LoadAsync(path, options);
+```
+
+The complete cross-format policy is in
+[loading-untrusted-input.md](loading-untrusted-input.md).
+
 ## Formatting
 
 Formats are immutable records where `null` means "inherit":

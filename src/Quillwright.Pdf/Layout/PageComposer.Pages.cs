@@ -117,6 +117,7 @@ internal sealed partial class PageComposer
         StartPage(_section, sectionStart: false);
     }
 
+
     /// <summary>Draws the background and the border a block asks for, around the part on this page.</summary>
     /// <param name="box">The paragraph being placed.</param>
     /// <param name="index">The first line placed here.</param>

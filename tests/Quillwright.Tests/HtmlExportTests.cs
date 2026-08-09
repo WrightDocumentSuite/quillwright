@@ -13,6 +13,23 @@ namespace Quillwright.Tests;
 public class HtmlExportTests
 {
     [Fact]
+    public void Comments_AreSkippedAndReportedOnce()
+    {
+        WordDocument document = WordDocument.Create();
+        Paragraph paragraph = document.Sections[0].AddParagraph("Reviewed text.");
+        Comment comment = document.AddComment(paragraph, 0, 8, "First review note.");
+        document.AddReply(comment, "A reply.");
+
+        Quillwright.Html.HtmlDocument html = document.ToHtml(new HtmlExportOptions { FullDocument = false });
+
+        HtmlExportWarning warning = Assert.Single(html.Diagnostics, static candidate =>
+            candidate.Kind == HtmlExportWarningKind.ContentSkipped && candidate.Subject == "comments");
+        Assert.Contains("review state", warning.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("First review note", html.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("A reply", html.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AFullPage_CarriesItsSkeletonTitleAndLanguage()
     {
         WordDocument document = WordDocument.Create();
@@ -84,6 +101,22 @@ public class HtmlExportTests
     }
 
     [Fact]
+    public void CssFontFamily_IsQuotedEscapedAndRoundTrips()
+    {
+        const string Family = "O'Reilly\\Fonts\nNext\"Face";
+        WordDocument document = WordDocument.Create();
+        var paragraph = new Paragraph();
+        paragraph.AppendText("x", RunFormat.Default with { FontAscii = Family, FontHighAnsi = Family });
+        document.Sections[0].Blocks.Add(paragraph);
+
+        string html = document.ToHtml(new HtmlExportOptions { FullDocument = false }).Text;
+        WordDocument imported = HtmlImporter.Import(html).Document;
+
+        Assert.Contains("font-family:'O\\'Reilly\\\\Fonts\\a Next&quot;Face'", html, StringComparison.Ordinal);
+        Assert.Equal(Family, imported.Paragraphs.Single().FormatAtOffset(0).FontAscii);
+    }
+
+    [Fact]
     public void LinksAndAnchors_ResolveAndEscape()
     {
         WordDocument document = WordDocument.Create();
@@ -134,11 +167,30 @@ public class HtmlExportTests
 
         Assert.Contains("<ul>", html, StringComparison.Ordinal);
         Assert.Contains("<li>one</li>", html, StringComparison.Ordinal);
-        int outer = html.IndexOf("<li>two</li>", StringComparison.Ordinal);
+        int outer = html.IndexOf("<li>two", StringComparison.Ordinal);
         int nested = html.IndexOf("<li>nested</li>", StringComparison.Ordinal);
         Assert.True(outer >= 0 && nested > outer);
         Assert.Contains("<ol>", html, StringComparison.Ordinal);
         Assert.Contains("<li>first</li>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NestedList_IsOwnedByThePrecedingListItem()
+    {
+        WordDocument document = WordDocument.Create();
+        int bullets = document.Numbering.AddBulletList();
+        AddItem(document, bullets, 0, "one");
+        AddItem(document, bullets, 0, "parent");
+        AddItem(document, bullets, 1, "child");
+
+        string html = document.ToHtml(new HtmlExportOptions { FullDocument = false }).Text;
+        HtmlElement body = Descendants(HtmlParser.Parse(html)).Single(static element => element.Is("body"));
+        HtmlElement list = body.Children.OfType<HtmlElement>().Single(static element => element.Is("ul"));
+        HtmlElement[] items = [.. list.Children.OfType<HtmlElement>()];
+
+        Assert.Equal(["li", "li"], items.Select(static element => element.Name).ToArray());
+        Assert.DoesNotContain(list.Children.OfType<HtmlElement>(), static element => element.Is("ul"));
+        Assert.Contains(items[1].Children.OfType<HtmlElement>(), static element => element.Is("ul"));
     }
 
     [Fact]
@@ -297,5 +349,18 @@ public class HtmlExportTests
         }
 
         return count;
+    }
+
+    private static IEnumerable<HtmlElement> Descendants(HtmlElement parent)
+    {
+        foreach (HtmlNode node in parent.Children)
+        {
+            if (node is not HtmlElement element)
+                continue;
+
+            yield return element;
+            foreach (HtmlElement descendant in Descendants(element))
+                yield return descendant;
+        }
     }
 }

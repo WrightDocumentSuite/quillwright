@@ -32,7 +32,7 @@ Semantic elements first, CSS only for what HTML has no element for:
 | Highlighting | `mark` with the palette colour |
 | Colour, size, family, small caps, character shading | `span` with the CSS |
 | Hyperlinks and bookmarks | `a href` (with `title`), `a id`; internal links resolve to the bookmark's id |
-| Lists | Real nested `ul`/`ol` from the numbering: the kind per level, `type` for roman and letters, `start` and `value` where Word's counting departs from HTML's |
+| Lists | Real nested `ul`/`ol` from the numbering: the kind per level, `type` for roman and letters, CSS2 marker styles where HTML has no `type`, and `start`/`value` where Word's counting departs from HTML's |
 | Tables | `table` with `thead`/`th` from header rows, `colspan` from grid spans, `rowspan` from vertical merges, cell shading and vertical alignment as CSS |
 | Pictures | `img` with alt text and its stated size; `data:` URI or sidecar file |
 | Footnotes and endnotes | Superscript links to a `footnotes` section at the foot, linked back |
@@ -40,11 +40,28 @@ Semantic elements first, CSS only for what HTML has no element for:
 | A bottom-ruled empty paragraph | `hr` |
 | Tracked changes in `Marked` mode | `ins` and `del` |
 
+A nested list is emitted inside the `li` that owns it, never as a direct child of another
+`ul` or `ol`. Counter restarts are kept with `start` on the list and `value` on the item, which
+also gives a standards-valid representation of descending numbering. Unnumbered
+`ListParagraph` paragraphs whose explicit indent matches an open list level are emitted as
+continuation `p` elements inside that same item; this is the DOCX representation used by the
+HTML importer for a multi-paragraph `li` and for content following a nested list.
+
+The exporter snapshots numbering instances and definitions once for the operation. Resolving
+paragraph styles, restart overrides and nested-list ownership therefore uses the same indexed
+view instead of rescanning `numbering.xml` for every item. If a malformed document contains
+duplicate numbering identifiers, the first declaration still wins, matching the public model's
+existing resolution semantics.
+
 A link whose target could execute — `javascript:` and its relatives — is rendered as plain
 text and named in the diagnostics (`UnsafeLinkSkipped`); text and attributes are always
 escaped. What the walker cannot carry — a chart, raw OOXML — is left out with the same
 diagnostics the Markdown export gives, and everything else about the export is deterministic:
 the same document renders to the same bytes.
+
+Comments and replies are review metadata rather than page content and are not embedded in the
+HTML preview. If the source contains any, the exporter adds one `ContentSkipped` diagnostic
+with subject `comments`; the anchored document text is still emitted normally.
 
 ## What it is not
 

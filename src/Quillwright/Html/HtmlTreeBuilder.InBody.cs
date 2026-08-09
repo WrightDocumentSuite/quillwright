@@ -33,6 +33,10 @@ internal sealed partial class HtmlTreeBuilder
                 InsertComment(token);
                 return;
 
+            case HtmlTokenKind.ProcessingInstruction:
+                InsertProcessingInstruction(token);
+                return;
+
             case HtmlTokenKind.Doctype:
                 return;
 
@@ -243,6 +247,9 @@ internal sealed partial class HtmlTreeBuilder
                 return;
 
             case "input":
+                if (FragmentContextIs("select"))
+                    return;
+
                 if (InScope("select"))
                     PopUntilPopped("select");
 
@@ -313,6 +320,9 @@ internal sealed partial class HtmlTreeBuilder
                 return;
 
             case "select":
+                if (FragmentContextIs("select"))
+                    return;
+
                 if (InScope("select"))
                 {
                     PopUntilPopped("select");
@@ -399,11 +409,7 @@ internal sealed partial class HtmlTreeBuilder
 
     private static void MergeAttributes(HtmlElement element, HtmlToken token)
     {
-        foreach (HtmlAttribute attribute in token.Attributes)
-        {
-            if (element.Attribute(attribute.Name) is null)
-                element.Attributes.Add(attribute);
-        }
+        element.AddAttributes(token.Attributes);
     }
 
     /// <summary>

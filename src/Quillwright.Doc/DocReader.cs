@@ -44,7 +44,7 @@ public static class DocReader
     /// <param name="path">Path to the <c>.doc</c> file.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
     public static async ValueTask<WordDocument> LoadAsync(string path, CancellationToken cancellationToken = default) =>
-        Load(await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false));
+        await LoadWithOptionsAsync(path, DocImportOptions.Default, cancellationToken).ConfigureAwait(false);
 
     /// <summary>Reads a legacy document from a file, with a password when it needs one.</summary>
     /// <param name="path">Path to the <c>.doc</c> file.</param>
@@ -52,34 +52,66 @@ public static class DocReader
     /// <param name="cancellationToken">Cancels the read.</param>
     public static async ValueTask<WordDocument> LoadAsync(
         string path, string? password, CancellationToken cancellationToken = default) =>
-        Load(await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false), password);
+        await LoadWithOptionsAsync(
+            path, new DocImportOptions { Password = password }, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Reads a legacy document from a file with explicit resource limits.</summary>
+    /// <param name="path">Path to the <c>.doc</c> file.</param>
+    /// <param name="options">Password and resource limits.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    public static async ValueTask<WordDocument> LoadWithOptionsAsync(
+        string path, DocImportOptions options, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        byte[] bytes = await DocumentInput.ReadFileBytesAsync(path, options.Budget, cancellationToken).ConfigureAwait(false);
+        return LoadWithOptions(bytes, options);
+    }
 
     /// <summary>Reads a legacy document from a stream.</summary>
     /// <param name="stream">Stream positioned at the start of the file.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
     public static async ValueTask<WordDocument> LoadAsync(Stream stream, CancellationToken cancellationToken = default)
+        => await LoadWithOptionsAsync(stream, DocImportOptions.Default, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Reads a legacy document from a stream with explicit resource limits.</summary>
+    /// <param name="stream">Stream positioned at the start of the file.</param>
+    /// <param name="options">Password and resource limits.</param>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    public static async ValueTask<WordDocument> LoadWithOptionsAsync(
+        Stream stream, DocImportOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        using var buffer = new MemoryStream();
-        await stream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-        return Load(buffer.ToArray());
+        ArgumentNullException.ThrowIfNull(options);
+        byte[] bytes = await DocumentInput.ReadBytesAsync(stream, options.Budget, cancellationToken).ConfigureAwait(false);
+        return LoadWithOptions(bytes, options);
     }
 
     /// <summary>Reads a legacy document from bytes.</summary>
     /// <param name="bytes">The whole file.</param>
     /// <param name="password">Password of an encrypted document, when there is one.</param>
     public static WordDocument Load(byte[] bytes, string? password = null)
+        => LoadWithOptions(bytes, new DocImportOptions { Password = password });
+
+    /// <summary>Reads a legacy document from bytes with explicit resource limits.</summary>
+    /// <param name="bytes">The whole file.</param>
+    /// <param name="options">Password and resource limits.</param>
+    public static WordDocument LoadWithOptions(byte[] bytes, DocImportOptions options)
     {
+        ArgumentNullException.ThrowIfNull(bytes);
+        ArgumentNullException.ThrowIfNull(options);
+        var loadBudget = new DocumentLoadBudgetState(options.Budget);
+        DocumentLoadBudgetState.Ensure(
+            nameof(DocumentLoadBudget.MaxInputBytes), options.Budget.MaxInputBytes, bytes.LongLength);
         if (!CompoundFile.IsCompoundFile(bytes))
             throw new DocFormatException("The file is not a Word 97-2003 document: the compound file signature is missing.");
 
-        CompoundFile container = CompoundFile.Open(bytes);
+        CompoundFile container = CompoundFile.Open(bytes, options.Budget);
         byte[] document = container.ReadStream("WordDocument")
             ?? throw new DocFormatException("The compound file has no WordDocument stream.");
 
         // Whether the file is locked is settled before anything else is looked for: a document
         // nobody has the password to is refused as locked, not as missing a table stream.
-        RefuseIfUnopenable(document, password);
+        RefuseIfUnopenable(document, options.Password);
 
         bool table1 = FileInformationBlock.PrefersTable1(document);
         string tableName = table1 ? "1Table" : "0Table";
@@ -89,9 +121,9 @@ public static class DocReader
         byte[] data = container.ReadStream("Data") ?? [];
 
         if (DocDecryptor.Protection(document).Encrypted)
-            (document, table, data) = DocDecryptor.Decrypt(document, table, data, password);
+            (document, table, data) = DocDecryptor.Decrypt(document, table, data, options.Password);
         FileInformationBlock fib = FileInformationBlock.Read(document);
-        var context = new DocReadContext(document, table, data, fib)
+        var context = new DocReadContext(document, table, data, fib, loadBudget)
         {
             Container = container,
         };
@@ -120,12 +152,18 @@ internal sealed class DocReadContext
     private readonly List<DocumentWarning> _warnings = [];
     private readonly HashSet<int> _claimedTextboxes = [];
 
-    public DocReadContext(byte[] document, byte[] table, byte[] data, FileInformationBlock fib)
+    public DocReadContext(
+        byte[] document,
+        byte[] table,
+        byte[] data,
+        FileInformationBlock fib,
+        DocumentLoadBudgetState loadBudget)
     {
         Document = document;
         Table = table;
         Data = data;
         Fib = fib;
+        LoadBudget = loadBudget;
 
         (int clxOffset, int clxLength) = fib.PieceTable;
         Pieces = clxLength > 0
@@ -160,7 +198,7 @@ internal sealed class DocReadContext
         Textboxes = DocTextboxTable.Read(table, fib.Textboxes);
         HeaderTextboxes = DocTextboxTable.Read(table, fib.HeaderTextboxes);
         Drawings = OfficeArtShapes.Read(table, fib.Drawings);
-        Blips = OfficeArtBlipStore.Read(table, fib.Drawings, document);
+        Blips = OfficeArtBlipStore.Read(table, fib.Drawings, document, loadBudget);
 
         Ansi = Encoding.GetEncoding(1252);
         CharacterRuns = BuildCharacterRuns();
@@ -191,6 +229,9 @@ internal sealed class DocReadContext
     /// part nothing points at.
     /// </summary>
     public List<ImageData> Images { get; } = [];
+
+    /// <summary>Resource counters shared by binary sub-readers.</summary>
+    public DocumentLoadBudgetState LoadBudget { get; }
 
     /// <summary>What the conversion could not carry across, in the order it was found.</summary>
     public IReadOnlyList<DocumentWarning> Warnings => _warnings;

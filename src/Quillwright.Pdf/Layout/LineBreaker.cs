@@ -83,7 +83,7 @@ internal sealed partial class LineBreaker
                 // The break ends the line only when there is something on it: a paragraph that
                 // opens with a page break starts on the new page rather than leaving a blank line.
                 _line.EmptyStyle ??= item.Style;
-                if (_line.Fragments.Count > 0)
+                if (!_line.IsEmpty)
                     BreakStrip();
 
                 if (item.Kind == InlineKind.ColumnBreak)
@@ -115,6 +115,10 @@ internal sealed partial class LineBreaker
 
             case InlineKind.NoteReference:
                 AddNoteReference(item);
+                break;
+
+            case InlineKind.CommentReference:
+                AddCommentReference(item);
                 break;
 
             default:
@@ -313,6 +317,9 @@ internal sealed partial class LineBreaker
         double width = 0;
         for (int i = line.Fragments.Count - 1; i >= 0; i--)
         {
+            if (line.Fragments[i] is CommentFragment)
+                continue;
+
             if (line.Fragments[i] is not TextFragment text)
                 break;
 
@@ -359,7 +366,7 @@ internal sealed partial class LineBreaker
 
         if (segment.Length == 0)
         {
-            if (soft && _line.Fragments.Count > 0)
+            if (soft && !_line.IsEmpty)
                 _softBreak = item;
 
             return;
@@ -371,7 +378,7 @@ internal sealed partial class LineBreaker
             double core = item.Style.Measure(segment.AsSpan().TrimEnd(' '));
             double reserve = soft ? item.Style.Measure("-") : 0;
 
-            if (_x + core + reserve > _line.AvailableWidth && _line.Fragments.Count > 0)
+            if (_x + core + reserve > _line.AvailableWidth && !_line.IsEmpty)
             {
                 if (SplitAtHyphen(segment, item) is { } rest)
                 {
@@ -383,7 +390,7 @@ internal sealed partial class LineBreaker
             }
 
             // A leading space on a wrapped line is dropped, exactly as a word processor drops it.
-            if (_line.Fragments.Count == 0 && segment.Length > 0 && segment[0] == ' ' && _lines.Count > 0)
+            if (_line.IsEmpty && segment.Length > 0 && segment[0] == ' ' && _lines.Count > 0)
             {
                 string trimmed = segment.TrimStart(' ');
                 if (trimmed.Length == 0)
@@ -394,7 +401,7 @@ internal sealed partial class LineBreaker
                 core = item.Style.Measure(segment.AsSpan().TrimEnd(' '));
             }
 
-            if (_line.Fragments.Count == 0 && core > _line.AvailableWidth)
+            if (_line.IsEmpty && core > _line.AvailableWidth)
             {
                 if (SplitAtHyphen(segment, item) is { } rest)
                 {

@@ -238,7 +238,7 @@ internal sealed class ParagraphLayouter
             single = Math.Max(single, fragment.LineHeight);
         }
 
-        if (line.Fragments.Count == 0 && line.EmptyStyle is { } empty)
+        if (line.IsEmpty && line.EmptyStyle is { } empty)
         {
             ascent = empty.Ascent;
             descent = empty.Descent;

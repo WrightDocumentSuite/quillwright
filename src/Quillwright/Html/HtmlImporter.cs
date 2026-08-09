@@ -1,4 +1,6 @@
 using System.Globalization;
+using Quillwright.Diagnostics;
+using Quillwright.IO;
 using Quillwright.Model;
 using Quillwright.Primitives;
 using Quillwright.Styles;
@@ -27,14 +29,47 @@ public static class HtmlImporter
         ArgumentNullException.ThrowIfNull(html);
 
         var context = new ImportContext(options ?? new HtmlImportOptions());
-        HtmlElement root = HtmlParser.Parse(html);
+        context.Budget.ValidateText(html);
+        HtmlElement root = HtmlParser.Parse(html, context.Budget);
 
         if (FindElement(root, "title") is { } title)
-            context.Document.Properties.Title = NormalizeWhitespace(PlainText(title)).Trim();
+            context.Document.Properties.Title = NormalizeWhitespace(PlainText(title)).Trim(' ');
 
         HtmlElement body = FindElement(root, "body") ?? root;
         var blocks = new BlockTarget(context.Document.Sections[0].Blocks);
         MapBlocks(body, context, blocks, new Inherited());
+        blocks.Flush();
+
+        if (context.Document.Sections[0].Blocks.Count == 0)
+            context.Document.Sections[0].AddParagraph(string.Empty);
+
+        return new HtmlImportResult(context.Document, context.Diagnostics);
+    }
+
+    /// <summary>Imports an HTML fragment using the supplied HTML element as its parsing context.</summary>
+    /// <param name="html">The fragment markup.</param>
+    /// <param name="contextElement">
+    /// The local name that selects the tokenizer state and tree-construction insertion mode.
+    /// </param>
+    /// <param name="options">How to import it, or <see langword="null"/> for the defaults.</param>
+    /// <remarks>
+    /// The context element itself is not included in the result. For example, a
+    /// <c>textarea</c> context treats tags as text, while a <c>table</c> context creates the
+    /// table children browsers imply for the same fragment.
+    /// </remarks>
+    public static HtmlImportResult ImportFragment(
+        string html,
+        string contextElement = "body",
+        HtmlImportOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(html);
+        ArgumentException.ThrowIfNullOrEmpty(contextElement);
+
+        var context = new ImportContext(options ?? new HtmlImportOptions());
+        context.Budget.ValidateText(html);
+        HtmlElement fragment = HtmlParser.ParseFragment(html, contextElement, budget: context.Budget);
+        var blocks = new BlockTarget(context.Document.Sections[0].Blocks);
+        MapBlocks(fragment, context, blocks, new Inherited());
         blocks.Flush();
 
         if (context.Document.Sections[0].Blocks.Count == 0)
@@ -54,19 +89,32 @@ public static class HtmlImporter
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
 
-        string html = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
         options ??= new HtmlImportOptions();
+        byte[] bytes = await DocumentInput.ReadFileBytesAsync(path, options.Budget, cancellationToken).ConfigureAwait(false);
+        string html = HtmlEncoding.Decode(bytes);
         if (options.MediaDirectory is null)
             options = options with { MediaDirectory = Path.GetDirectoryName(Path.GetFullPath(path)) };
 
         return Import(html, options);
     }
 
-    private sealed class ImportContext(HtmlImportOptions options)
+    private sealed class ImportContext
     {
-        public HtmlImportOptions Options { get; } = options;
+        public ImportContext(HtmlImportOptions options)
+        {
+            Options = options;
+            Budget = new DocumentLoadBudgetState(options.Budget);
+            Document = WordDocument.Create();
+            Numbering = new NumberingBuilder(Document.Numbering);
+        }
 
-        public WordDocument Document { get; } = WordDocument.Create();
+        public HtmlImportOptions Options { get; }
+
+        public DocumentLoadBudgetState Budget { get; }
+
+        public WordDocument Document { get; }
+
+        public NumberingBuilder Numbering { get; }
 
         public HtmlImportDiagnostics Diagnostics { get; } = new();
 
@@ -88,7 +136,11 @@ public static class HtmlImporter
 
                 try
                 {
-                    return Document.Media.Add(ImageData.FromBytes(Convert.FromBase64String(source[(comma + 1)..])));
+                    ReadOnlySpan<char> encoded = source.AsSpan(comma + 1);
+                    Budget.EnsureMedia(EstimatedBase64Bytes(encoded));
+                    byte[] bytes = Convert.FromBase64String(source[(comma + 1)..]);
+                    Budget.AddMedia(bytes.LongLength);
+                    return Document.Media.Add(ImageData.FromBytes(bytes));
                 }
                 catch (FormatException)
                 {
@@ -115,24 +167,63 @@ public static class HtmlImporter
                 return null;
             }
 
-            string relative = Uri.UnescapeDataString(source);
-            string full = Path.GetFullPath(Path.Combine(Options.MediaDirectory, relative));
-            if (!full.StartsWith(Path.GetFullPath(Options.MediaDirectory), StringComparison.OrdinalIgnoreCase))
+            if (Budget.MaximumNextMediaBytes < 1)
+            {
+                throw new DocumentLoadLimitException(
+                    nameof(DocumentLoadBudget.MaxTotalMediaBytes),
+                    Budget.Budget.MaxTotalMediaBytes,
+                    Budget.Budget.MaxTotalMediaBytes + 1);
+            }
+
+            MediaFileReadResult file = MediaFileResolver.Read(
+                Options.MediaDirectory, source, Budget.MaximumNextMediaBytes);
+            if (file.Status == MediaFileReadStatus.Unsafe)
             {
                 Diagnostics.Add(
                     HtmlImportWarningKind.ImageSkipped,
-                    "An image path that climbs out of the media directory is not followed.",
+                    "A rooted image path, a traversal segment or a symbolic link is not followed.",
                     source, line);
                 return null;
             }
 
-            if (!File.Exists(full))
+            if (file.Status == MediaFileReadStatus.Missing)
             {
                 Diagnostics.Add(HtmlImportWarningKind.ImageSkipped, "The image file does not exist.", source, line);
                 return null;
             }
 
-            return Document.Media.Add(ImageData.FromBytes(File.ReadAllBytes(full)));
+            if (file.Status == MediaFileReadStatus.Unreadable)
+            {
+                Diagnostics.Add(HtmlImportWarningKind.ImageSkipped, "The image file could not be read.", source, line);
+                return null;
+            }
+
+            if (file.Status == MediaFileReadStatus.TooLarge)
+            {
+                Budget.EnsureMedia(file.Length);
+                Diagnostics.Add(HtmlImportWarningKind.ImageSkipped, "The image file is too large to read.", source, line);
+                return null;
+            }
+
+            Budget.AddMedia(file.Bytes!.LongLength);
+            return Document.Media.Add(ImageData.FromBytes(file.Bytes!));
+        }
+
+        private static long EstimatedBase64Bytes(ReadOnlySpan<char> encoded)
+        {
+            long characters = 0;
+            int padding = 0;
+            for (int i = 0; i < encoded.Length; i++)
+            {
+                char character = encoded[i];
+                if (char.IsWhiteSpace(character))
+                    continue;
+                characters++;
+                padding = character == '=' ? padding + 1 : 0;
+            }
+
+            long bytes = ((characters + 3) / 4) * 3 - Math.Min(padding, 2);
+            return Math.Max(0, bytes);
         }
     }
 
@@ -146,6 +237,10 @@ public static class HtmlImporter
         public int? NumberingId { get; init; }
 
         public int ListLevel { get; init; }
+
+        public string? ListStyleType { get; init; }
+
+        public bool ListStyleTypeSpecified { get; init; }
 
         public bool Preformatted { get; init; }
 
@@ -204,9 +299,9 @@ public static class HtmlImporter
                 return;
             }
 
-            bool leading = text.Length > 0 && char.IsWhiteSpace(text[0]);
-            bool trailing = text.Length > 0 && char.IsWhiteSpace(text[^1]);
-            string collapsed = NormalizeWhitespace(text).Trim();
+            bool leading = text.Length > 0 && IsCollapsibleWhitespace(text[0]);
+            bool trailing = text.Length > 0 && IsCollapsibleWhitespace(text[^1]);
+            string collapsed = NormalizeWhitespace(text).Trim(' ');
 
             if (collapsed.Length == 0)
             {
@@ -359,8 +454,19 @@ public static class HtmlImporter
                 MapAnchor(element, context, target, inherited);
                 return;
 
+            case "noscript":
+                MapBlocks(element, context, target, WithCss(element, context, inherited));
+                return;
+
+            case "template":
+                context.Diagnostics.Add(
+                    HtmlImportWarningKind.ContentSkipped,
+                    "Inert template content was left out.",
+                    element.Name, element.Line);
+                return;
+
             case "script" or "style" or "iframe" or "object" or "embed" or "form" or "button" or "select"
-                or "textarea" or "input" or "canvas" or "svg" or "audio" or "video" or "noscript":
+                or "textarea" or "input" or "canvas" or "svg" or "audio" or "video":
                 context.Diagnostics.Add(
                     HtmlImportWarningKind.ContentSkipped,
                     "An element with no document counterpart was left out.",
@@ -498,17 +604,44 @@ public static class HtmlImporter
 
     private static void MapList(HtmlElement list, ImportContext context, BlockTarget target, Inherited inherited)
     {
-        int instance = inherited.NumberingId ?? (list.Name == "ol"
-            ? context.Document.Numbering.AddNumberedList()
-            : context.Document.Numbering.AddBulletList());
+        Inherited styledList = WithCss(list, context, inherited);
+        (AbstractNumbering baseDefinition, NumberingInstance baseInstance) = context.Numbering.AddList(
+            list.Name == "ol" ? ListTemplate.Decimal : ListTemplate.Bullet);
+        int instance = baseInstance.Id;
+        int listLevel = Math.Clamp(inherited.ListLevel + 1, 0, 8);
+        NumberingLevel definition = baseDefinition.Levels[listLevel];
+        string? typeMarker = ListTypeHint(list);
+        string marker = typeMarker ??
+            (inherited.ListStyleTypeSpecified ? inherited.ListStyleType : null) ??
+            HtmlListStyle.FromLevel(definition);
+        bool markerSpecified = typeMarker is null && inherited.ListStyleTypeSpecified;
+        if (TryCssListStyleType(list, inherited.ListStyleType, out string? cssMarker))
+        {
+            marker = cssMarker!;
+            markerSpecified = true;
+        }
+        HtmlListStyle.Apply(definition, marker);
 
-        Inherited itemContext = inherited with
+        List<HtmlElement> items =
+            [.. list.Children.OfType<HtmlElement>().Where(static child => child.Is("li"))];
+        bool ordered = list.Name == "ol";
+        bool reversed = ordered && list.Attribute("reversed") is not null;
+        int start = HtmlInteger(list.Attribute("start")) ?? (reversed ? items.Count : 1);
+        definition.Start = start;
+
+        Inherited itemContext = styledList with
         {
             NumberingId = instance,
-            ListLevel = inherited.ListLevel + 1,
+            ListLevel = listLevel,
+            ListStyleType = marker,
+            ListStyleTypeSpecified = markerSpecified,
             StyleId = context.Document.Styles.GetOrAdd("ListParagraph").Id,
         };
 
+        int currentInstance = instance;
+        string currentMarker = marker;
+        int nextValue = start;
+        bool firstItem = true;
         foreach (HtmlNode node in list.Children)
         {
             if (node is not HtmlElement child)
@@ -516,8 +649,58 @@ public static class HtmlImporter
 
             if (child.Name == "li")
             {
-                MapBlocks(child, context, target, WithCss(child, context, itemContext));
-                target.Flush();
+                int? explicitValue = ordered ? HtmlInteger(child.Attribute("value")) : null;
+                int value = explicitValue ?? nextValue;
+                string? itemTypeMarker = ListItemTypeHint(child);
+                string itemMarker = itemTypeMarker ?? marker;
+                bool itemMarkerSpecified = itemTypeMarker is null && markerSpecified;
+                if (TryCssListStyleType(child, marker, out string? itemCssMarker))
+                {
+                    itemMarker = itemCssMarker!;
+                    itemMarkerSpecified = true;
+                }
+
+                bool restart = itemMarker != currentMarker;
+
+                if (reversed)
+                {
+                    if (!firstItem || explicitValue is not null)
+                        restart = true;
+                    nextValue = value - 1;
+                }
+                else
+                {
+                    if (explicitValue is not null && (!firstItem || value != start))
+                        restart = true;
+                    nextValue = value + 1;
+                }
+
+                if (restart)
+                {
+                    currentInstance = RestartList(
+                        context.Numbering,
+                        baseInstance,
+                        listLevel,
+                        value,
+                        definition,
+                        itemMarker == marker ? null : itemMarker);
+                    currentMarker = itemMarker;
+                }
+
+                Inherited currentItem = WithCss(child, context, itemContext) with
+                {
+                    NumberingId = currentInstance,
+                    ListStyleType = itemMarker,
+                    ListStyleTypeSpecified = itemMarkerSpecified,
+                };
+                var itemBlocks = new List<Block>();
+                var itemTarget = new BlockTarget(itemBlocks);
+                MapBlocks(child, context, itemTarget, currentItem);
+                itemTarget.Flush();
+                NormalizeListItem(itemBlocks, currentItem, definition);
+                foreach (Block block in itemBlocks)
+                    target.Add(block);
+                firstItem = false;
             }
             else if (child.Name is "ul" or "ol")
             {
@@ -527,6 +710,168 @@ public static class HtmlImporter
 
         if (inherited.NumberingId is null)
             target.Flush();
+    }
+
+    private static void NormalizeListItem(List<Block> blocks, Inherited item, NumberingLevel definition)
+    {
+        int ownerIndex = blocks.FindIndex(block => block is Paragraph paragraph &&
+            paragraph.Format.NumberingId == item.NumberingId &&
+            paragraph.Format.NumberingLevel == item.ListLevel);
+        bool insertOwner = ownerIndex != 0;
+        if (insertOwner)
+        {
+            blocks.Insert(0, new Paragraph
+            {
+                Format = ParagraphFormat.Default with
+                {
+                    StyleId = item.StyleId,
+                    NumberingId = item.NumberingId,
+                    NumberingLevel = item.ListLevel,
+                    Alignment = item.Alignment,
+                },
+            });
+        }
+
+        bool keptOwner = false;
+        foreach (Paragraph paragraph in blocks.OfType<Paragraph>())
+        {
+            if (paragraph.Format.NumberingId != item.NumberingId ||
+                paragraph.Format.NumberingLevel != item.ListLevel)
+            {
+                continue;
+            }
+
+            if (!keptOwner)
+            {
+                keptOwner = true;
+                continue;
+            }
+
+            paragraph.Format = paragraph.Format with
+            {
+                NumberingId = null,
+                NumberingLevel = null,
+                StyleId = item.StyleId,
+                IndentLeft = definition.ParagraphFormat.IndentLeft,
+                IndentFirstLine = null,
+                IndentHanging = null,
+                IndentLeftCharacters = null,
+                IndentFirstLineCharacters = null,
+                IndentHangingCharacters = null,
+            };
+        }
+    }
+
+    private static bool TryCssListStyleType(HtmlElement element, string? inherited, out string? marker)
+    {
+        marker = null;
+        bool found = false;
+        foreach ((string name, string value) in Css(element))
+        {
+            if (name != "list-style-type")
+                continue;
+
+            if (HtmlCssParser.Identifier(value) is not { } identifier)
+                continue;
+
+            string keyword = HtmlCssParser.AsciiLower(identifier);
+            if (keyword == "inherit")
+            {
+                marker = inherited ?? "disc";
+                found = true;
+            }
+            else if (HtmlListStyle.Canonical(keyword) is { } supported)
+            {
+                marker = supported;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    private static string? ListTypeHint(HtmlElement list)
+    {
+        if (list.Name == "ol")
+        {
+            return list.Attribute("type") switch
+            {
+                "1" => "decimal",
+                "a" => "lower-latin",
+                "A" => "upper-latin",
+                "i" => "lower-roman",
+                "I" => "upper-roman",
+                _ => null,
+            };
+        }
+
+        return list.Attribute("type") is { } type
+            ? HtmlListStyle.Canonical(HtmlCssParser.AsciiLower(type))
+            : null;
+    }
+
+    private static string? ListItemTypeHint(HtmlElement item)
+    {
+        return item.Attribute("type") switch
+        {
+            "1" => "decimal",
+            "a" => "lower-latin",
+            "A" => "upper-latin",
+            "i" => "lower-roman",
+            "I" => "upper-roman",
+            { } type => HtmlListStyle.Canonical(HtmlCssParser.AsciiLower(type)),
+            _ => null,
+        };
+    }
+
+    private static int RestartList(
+        NumberingBuilder numbering,
+        NumberingInstance source,
+        int level,
+        int start,
+        NumberingLevel sourceLevel,
+        string? marker = null)
+    {
+        NumberingInstance restarted = numbering.AddInstance(source.AbstractId);
+        var levelOverride = new NumberingLevelOverride { Level = level, StartOverride = start };
+        if (marker is not null)
+        {
+            levelOverride.Definition = sourceLevel.Clone();
+            HtmlListStyle.Apply(levelOverride.Definition, marker);
+        }
+
+        restarted.Overrides.Add(levelOverride);
+        return restarted.Id;
+    }
+
+    private static int? HtmlInteger(string? value)
+    {
+        if (value is null)
+            return null;
+
+        ReadOnlySpan<char> source = value.AsSpan();
+        int index = 0;
+        while (index < source.Length && source[index] is ' ' or '\t' or '\n' or '\f' or '\r')
+            index++;
+        if (index == source.Length)
+            return null;
+
+        bool negative = source[index] == '-';
+        if (negative || source[index] == '+')
+            index++;
+        if (index == source.Length || !char.IsAsciiDigit(source[index]))
+            return null;
+
+        long parsed = 0;
+        long limit = negative ? (long)int.MaxValue + 1 : int.MaxValue;
+        while (index < source.Length && char.IsAsciiDigit(source[index]))
+        {
+            parsed = (parsed * 10) + source[index++] - '0';
+            if (parsed > limit)
+                return null;
+        }
+
+        return negative ? (int)-parsed : (int)parsed;
     }
 
     private static Table MapTable(HtmlElement table, ImportContext context)
@@ -653,21 +998,24 @@ public static class HtmlImporter
         Inherited result = inherited;
         foreach ((string name, string value) in Css(element))
         {
+            string keyword = HtmlCssParser.Identifier(value) is { } identifier
+                ? HtmlCssParser.AsciiLower(identifier)
+                : HtmlCssParser.AsciiLower(value.Trim());
             switch (name)
             {
-                case "font-weight" when value is "bold" or "bolder" || Numeric(value) >= 600:
+                case "font-weight" when keyword is "bold" or "bolder" || Numeric(value) >= 600:
                     result = result with { Format = result.Format with { Bold = true } };
                     break;
-                case "font-weight" when value is "normal" || Numeric(value) is > 0 and < 600:
+                case "font-weight" when keyword is "normal" || Numeric(value) is > 0 and < 600:
                     result = result with { Format = result.Format with { Bold = false } };
                     break;
-                case "font-style" when value is "italic" or "oblique":
+                case "font-style" when keyword is "italic" or "oblique":
                     result = result with { Format = result.Format with { Italic = true } };
                     break;
-                case "text-decoration" or "text-decoration-line" when value.Contains("underline", StringComparison.Ordinal):
+                case "text-decoration" or "text-decoration-line" when value.Contains("underline", StringComparison.OrdinalIgnoreCase):
                     result = result with { Format = result.Format with { Underline = UnderlineStyle.Single } };
                     break;
-                case "text-decoration" or "text-decoration-line" when value.Contains("line-through", StringComparison.Ordinal):
+                case "text-decoration" or "text-decoration-line" when value.Contains("line-through", StringComparison.OrdinalIgnoreCase):
                     result = result with { Format = result.Format with { Strike = true } };
                     break;
                 case "color" when CssColor(value) is { } color:
@@ -687,22 +1035,21 @@ public static class HtmlImporter
                     break;
                 case "font-family":
                 {
-                    string family = value.Split(',')[0].Trim().Trim('"', '\'');
-                    if (family.Length > 0)
+                    if (HtmlCssParser.FirstFontFamily(value) is { Length: > 0 } family)
                         result = result with { Format = result.Format with { FontAscii = family, FontHighAnsi = family } };
                     break;
                 }
 
-                case "font-variant" when value.Contains("small-caps", StringComparison.Ordinal):
+                case "font-variant" when value.Contains("small-caps", StringComparison.OrdinalIgnoreCase):
                     result = result with { Format = result.Format with { SmallCaps = true } };
                     break;
-                case "text-transform" when value == "uppercase":
+                case "text-transform" when keyword == "uppercase":
                     result = result with { Format = result.Format with { Caps = true } };
                     break;
                 case "text-align":
                     result = result with
                     {
-                        Alignment = value switch
+                        Alignment = keyword switch
                         {
                             "center" => ParagraphAlignment.Center,
                             "right" or "end" => ParagraphAlignment.Right,
@@ -711,6 +1058,16 @@ public static class HtmlImporter
                             _ => result.Alignment,
                         },
                     };
+                    break;
+                case "list-style-type" when keyword == "inherit":
+                    result = result with
+                    {
+                        ListStyleType = inherited.ListStyleType ?? "disc",
+                        ListStyleTypeSpecified = true,
+                    };
+                    break;
+                case "list-style-type" when HtmlListStyle.Canonical(keyword) is { } marker:
+                    result = result with { ListStyleType = marker, ListStyleTypeSpecified = true };
                     break;
                 default:
                     break;
@@ -747,16 +1104,10 @@ public static class HtmlImporter
         if (style is null)
             yield break;
 
-        foreach (string declaration in style.Split(';'))
+        foreach (HtmlCssDeclaration declaration in HtmlCssParser.ParseDeclarations(style))
         {
-            int colon = declaration.IndexOf(':', StringComparison.Ordinal);
-            if (colon <= 0)
-                continue;
-
-            string name = declaration[..colon].Trim().ToLowerInvariant();
-            string value = declaration[(colon + 1)..].Trim();
-            if (name.Length > 0 && value.Length > 0 && !name.StartsWith("mso-", StringComparison.Ordinal))
-                yield return (name, value.ToLowerInvariant());
+            if (!declaration.Name.StartsWith("mso-", StringComparison.Ordinal))
+                yield return (declaration.Name, declaration.Value);
         }
     }
 
@@ -764,16 +1115,31 @@ public static class HtmlImporter
     {
         string trimmed = value.Trim();
         double factor;
-        if (trimmed.EndsWith("pt", StringComparison.Ordinal))
+        int unitLength;
+        if (trimmed.EndsWith("pt", StringComparison.OrdinalIgnoreCase))
+        {
             factor = 1;
-        else if (trimmed.EndsWith("px", StringComparison.Ordinal))
+            unitLength = 2;
+        }
+        else if (trimmed.EndsWith("px", StringComparison.OrdinalIgnoreCase))
+        {
             factor = 0.75;
-        else if (trimmed.EndsWith("em", StringComparison.Ordinal) || trimmed.EndsWith("rem", StringComparison.Ordinal))
+            unitLength = 2;
+        }
+        else if (trimmed.EndsWith("rem", StringComparison.OrdinalIgnoreCase))
+        {
             factor = 11;
+            unitLength = 3;
+        }
+        else if (trimmed.EndsWith("em", StringComparison.OrdinalIgnoreCase))
+        {
+            factor = 11;
+            unitLength = 2;
+        }
         else
             return null;
 
-        string number = trimmed.TrimEnd('t', 'p', 'x', 'm', 'e', 'r');
+        string number = trimmed[..^unitLength].TrimEnd();
         return double.TryParse(number, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) && parsed > 0
             ? Length.FromPoints(parsed * factor)
             : null;
@@ -781,7 +1147,7 @@ public static class HtmlImporter
 
     private static WordColor? CssColor(string value)
     {
-        string trimmed = value.Trim();
+        string trimmed = value.Trim(' ', '\t', '\n', '\r', '\f');
         if (trimmed.StartsWith('#'))
         {
             string hex = trimmed[1..];
@@ -793,7 +1159,7 @@ public static class HtmlImporter
                 : null;
         }
 
-        if (trimmed.StartsWith("rgb(", StringComparison.Ordinal) && trimmed.EndsWith(')'))
+        if (trimmed.StartsWith("rgb(", StringComparison.OrdinalIgnoreCase) && trimmed.EndsWith(')'))
         {
             string[] parts = trimmed[4..^1].Split(',');
             if (parts.Length == 3 &&
@@ -807,7 +1173,10 @@ public static class HtmlImporter
             return null;
         }
 
-        return trimmed switch
+        if (HtmlCssParser.Identifier(trimmed) is not { } identifier)
+            return null;
+
+        return HtmlCssParser.AsciiLower(identifier) switch
         {
             "black" => WordColor.FromRgb(0x000000),
             "white" => WordColor.FromRgb(0xFFFFFF),
@@ -877,7 +1246,7 @@ public static class HtmlImporter
         bool space = false;
         foreach (char c in text)
         {
-            if (char.IsWhiteSpace(c))
+            if (IsCollapsibleWhitespace(c))
             {
                 space = true;
                 continue;
@@ -895,4 +1264,7 @@ public static class HtmlImporter
 
         return normalized.ToString();
     }
+
+    private static bool IsCollapsibleWhitespace(char character) =>
+        character is '\t' or '\n' or '\f' or '\r' or ' ';
 }

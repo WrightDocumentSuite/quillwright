@@ -198,7 +198,7 @@ internal static class HtmlInlineWriter
 
         string css = Css(format, context);
         if (css.Length > 0)
-            Wrap($"span style=\"{css}\"");
+            Wrap($"span style=\"{Attribute(css)}\"");
 
         foreach (string tag in open)
             html.Append(tag);
@@ -228,7 +228,7 @@ internal static class HtmlInlineWriter
         if (format.FontAscii is { Length: > 0 } family && family != baseline.FontAscii &&
             !MarkdownInlineWalker.IsMonospace(format))
         {
-            Append(css, "font-family", "'" + family.Replace("'", string.Empty, StringComparison.Ordinal) + "'");
+            Append(css, "font-family", CssString(family));
         }
 
         if (format.SmallCaps == true)
@@ -282,6 +282,44 @@ internal static class HtmlInlineWriter
 
     private static string Points(Length length) =>
         (length.Twips / 20.0).ToString("0.##", CultureInfo.InvariantCulture);
+
+    /// <summary>Quotes a CSS string without changing its value.</summary>
+    private static string CssString(string value)
+    {
+        var escaped = new StringBuilder(value.Length + 2).Append('\'');
+        foreach (char character in value)
+        {
+            switch (character)
+            {
+                case '\\':
+                    escaped.Append("\\\\");
+                    break;
+                case '\'':
+                    escaped.Append("\\'");
+                    break;
+                case '\0':
+                    escaped.Append("\\fffd ");
+                    break;
+                case '\n':
+                    escaped.Append("\\a ");
+                    break;
+                case '\r':
+                    escaped.Append("\\d ");
+                    break;
+                case '\f':
+                    escaped.Append("\\c ");
+                    break;
+                default:
+                    if (char.IsControl(character))
+                        escaped.Append('\\').Append(((int)character).ToString("x", CultureInfo.InvariantCulture)).Append(' ');
+                    else
+                        escaped.Append(character);
+                    break;
+            }
+        }
+
+        return escaped.Append('\'').ToString();
+    }
 
     private static bool SafeUrl(string url)
     {

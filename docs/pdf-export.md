@@ -58,6 +58,13 @@ options.FontFiles["Calibri Bold"] = "/srv/fonts/Carlito-Bold.ttf";
 Faces are embedded once per document and, unless `SubsetFonts` is turned off, carry only the
 glyphs the document actually used.
 
+Installed TrueType/OpenType faces are matched by the family and PostScript metadata inside the
+font file, not by the filename alone. Legacy Word/PDF names (`Times New Roman CYR`, `Times-Roman`,
+subset-prefixed PostScript names) therefore select the installed Times New Roman face and keep the
+requested bold/italic variant instead of falling through to a substitute. A Windows compatibility
+fallback also recognises the abbreviated Office filenames (`times*.ttf`, `cour*.ttf`, `arial*.ttf`)
+when Quillwright is consumed with an older pinned Inkwright package.
+
 ## What is laid out
 
 **Text.** Line breaking at spaces, hyphens and slashes, with a word too long for any line split
@@ -104,13 +111,24 @@ only the bullet is, which is why the text beside it stays in the body font.
 preferences, or measured from the content when the table brought no grid at all. Horizontal and
 vertical merges, cell padding, shading, vertical alignment and the border conflicts between
 neighbours. Header rows repeat at the top of every page; a row that will not fit moves whole or
-is broken, depending on whether it allows it. Tables nest.
+is broken, depending on whether it allows it. Tables nest. Named table styles and their conditional
+first/last-row, first/last-column and banded regions are resolved into the table, row and cell
+formats used by layout, not only into the text inside the cells.
 
 **Sections.** Page size, orientation, margins and gutter per section; next-page, even-page,
 odd-page and continuous starts; page numbering that restarts and counts in the scheme the
 section chose. Headers and footers for the first page, for even pages and for the rest, with
 "link to previous" followed back through the sections. A header taller than the top margin
 pushes the body down rather than being drawn over it.
+
+In WordprocessingML, an intermediate `sectPr` belongs to the section it closes while its `w:type`
+states how the following section starts. The loader shifts that start forward and the saver writes
+it back on the preceding `sectPr` without discarding an empty paragraph that may be meaningful to
+the document. The model marks such a carrier, and PDF pagination does not charge its empty paragraph
+mark as an extra body line. Saved `w:lastRenderedPageBreak` hints are honoured by default,
+including hints inside table cells where the whole row moves. Set
+`PdfExportOptions.HonorLastRenderedPageBreaks = false` after substantial editing when reflow is
+preferred over matching the pagination of the last Word render.
 
 **Columns.** Text fills the first column to the bottom, then the next, then the next page.
 Equal columns split by count and gap; explicit ones sit at the widths the section states. A
@@ -166,7 +184,9 @@ prints and is named in the diagnostics; the `\p` form ("above", "below") keeps i
 it. A blind first estimate of a `PAGEREF` triggers the same single recomposition an unstable
 `NUMPAGES` does, so the widths the lines were measured with match what is printed.
 
-**Links.** A link out of the document becomes a URI annotation. A link to a bookmark becomes a
+**Links.** A link out of the document becomes a URI annotation. A link wrapping across several
+lines uses one annotation per page with a quadrilateral for each visual segment, rather than
+duplicating the link in the review/accessibility structure. A link to a bookmark becomes a
 destination pointing at the place the bookmark landed, resolved after pagination; one whose
 bookmark is nowhere is left inert rather than pointed at the wrong page.
 
@@ -214,11 +234,53 @@ size the format names for it, and a `bidiVisual` table draws its first column at
 
 **Text boxes.** A shape with words in it is drawn from the geometry the model reads off its
 markup: the fill, the frame, and the content — paragraphs and tables alike — laid out against
-the box's own width, behind Word's usual insets. An inline box stands on the baseline and takes
+the box's own width, behind the `wps:bodyPr` insets (or Word's usual defaults when they are
+omitted). Generated zero-inset fixed-layout boxes therefore use their whole frame instead of
+being measured against an invented margin. An inline box stands on the baseline and takes
 room on its line; a floating one is placed by its anchor and the text wraps round it like round
 a picture. Boxes nest. A box is a small page that never turns: content taller than it is cut off
 at its bottom edge, and the cut is said in the diagnostics — as is a shape whose markup states
 no size, which cannot be drawn at all.
+
+WordprocessingShape straight connectors, including the modern branch of a legacy VML fallback,
+are read as line primitives rather than opaque raw markup. Generated fixed-layout text boxes and
+lines use Word-compatible anchored DrawingML, so they survive a save/load round trip and render in
+desktop Word as well as in Quillwright.Pdf.
+
+## Interactive comments
+
+An ordinary PDF export matches printing and omits review balloons, reporting one `ContentSkipped`
+warning. Opt in when the PDF is meant to remain a review document:
+
+```csharp
+var options = new PdfExportOptions { IncludeComments = true };
+document.SaveAsPdf("review.pdf", options);
+```
+
+Each top-level Word comment becomes a sticky-note annotation at its laid-out comment reference.
+The body, author, UTC date and durable id are retained; Word replies become PDF replies, and the
+`done` flag is retained on each individual message as an ordinary informational reply. Word does
+not record who resolved a message or when, while ISO 32000-1 §12.5.6.3 requires the `/T` entry of
+a `/State` reply to identify that user. The exporter therefore does not fabricate a resolver or
+write an anonymous machine-readable `Completed` state: the informational reply has no author,
+timestamp, `/State` or `/StateModel`, and a `comment-resolved-state` diagnostic reports the loss.
+A top-level intelligent-placeholder follow-up is labelled `Follow-up` instead of exposing the
+producer prompt that [MS-DOCX] says to ignore.
+
+The icon is interactive viewer content, not page text, so it has zero layout metrics and does not
+change wrapping, empty-line height or pagination. Its bidi direction follows the logical run whose
+range ends there. A model comment with no printable anchor is skipped with a `comment-anchors`
+diagnostic; a reference whose comment body is missing uses `comment-references`.
+References inside repeated header/footer furniture or rotated text are not duplicated onto pages;
+their model messages remain un-emitted and are reported by the same `comment-anchors` diagnostic.
+
+When `Tagged` is also enabled, every note, reply and review-state annotation is owned by an `Annot`
+structure element through the full `OBJR`/`StructParent`/`ParentTree` chain. The `Annot` is inserted
+in `/K` where the zero-width comment reference occurs, between the marked-content sequences before
+and after it; this preserves assistive reading order rather than merely linking the object in both
+directions. Hyperlinks likewise use a `Link` element that owns both their marked text and their link
+annotation. This is built before any caller declares PDF/UA; pop-up helper annotations are
+intentionally excluded, as ISO 14289 does not treat them as page content.
 
 ## Tagged PDF
 
@@ -232,10 +294,11 @@ no size, which cannot be drawn at all.
 | Table | `Table` > `TR` > `TH` or `TD` |
 | Picture | `Figure`, with the description as `/Alt` |
 
-Header cells are given a column scope. Headers, footers, shading, rules and borders are marked
-as artifacts, so every mark on the page either belongs to the tree or says that it belongs to
-nobody. The document language comes from `PdfExportOptions.Language`, the document properties
-or the default run formatting, and a tagged document with a title asks readers to show it.
+Header cells are given a column scope. Interactive comments use `Annot`; hyperlinks use `Link`.
+Headers, footers, shading, rules and borders are marked as artifacts, so every mark on the page
+either belongs to the tree or says that it belongs to nobody. The document language comes from
+`PdfExportOptions.Language`, the document properties or the default run formatting, and a tagged
+document with a title asks readers to show it.
 
 A document built this way passes Inkwright's PDF/UA-1 validator without violations, but the
 converter does not claim conformance on its own: alt text, reading order and colour contrast are

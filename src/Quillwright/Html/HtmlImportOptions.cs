@@ -1,4 +1,5 @@
 using System.Collections;
+using Quillwright.Diagnostics;
 using Quillwright.Model;
 
 namespace Quillwright.Html;
@@ -6,9 +7,14 @@ namespace Quillwright.Html;
 /// <summary>Controls how HTML becomes a document.</summary>
 public sealed record HtmlImportOptions
 {
+    /// <summary>Resource limits for source markup, the parsed tree and imported images.</summary>
+    public DocumentLoadBudget Budget { get; init; } = DocumentLoadBudget.Default;
+
     /// <summary>
     /// Where a relative image path resolves. When unset, images that name a file cannot be
-    /// loaded and come through as their alternative text, each named in the diagnostics.
+    /// loaded and come through as their alternative text, each named in the diagnostics. Only
+    /// portable relative paths are followed; rooted paths, dot segments and filesystem links
+    /// below this caller-trusted directory are rejected.
     /// </summary>
     public string? MediaDirectory { get; init; }
 

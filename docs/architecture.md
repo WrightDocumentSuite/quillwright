@@ -9,6 +9,7 @@ public and usable on its own.
 L3  Quillwright.Templates   ITemplateBinder + incremental source generator (no reflection, AOT)
     Quillwright.Doc         Word 97-2003 both ways: compound file, piece table, formatting pages
     Quillwright.Pdf         Pagination and rendering to PDF, on top of Inkwright
+    Quillwright.Rtf         Semantic RTF 1.9.1 import/export through the document model
 L2  Model                   WordDocument / Section / Paragraph / Table, style resolver, editing
     Markdown, HTML          Pure semantic projections both ways + media, no layout or dependency
 L1  Streaming               DocxReader (pull, one block at a time) / DocxWriter (forward-only UTF-8)
@@ -20,8 +21,9 @@ need it: a `.doc` is one, and so is the VBA project inside a `.docm`. Reading ma
 belongs to the core, and `Quillwright.Doc` points the same reader at a storage instead of a
 whole file.
 
-`Quillwright.Templates`, `Quillwright.Doc` and `Quillwright.Pdf` are separate packages rather
-than parts of the core, so a caller who only reads and writes documents pays for none of them.
+`Quillwright.Templates`, `Quillwright.Doc`, `Quillwright.Pdf` and `Quillwright.Rtf` are separate
+packages rather than parts of the core, so a caller who only reads and writes DOCX documents
+pays for none of them.
 The PDF package is the only one with a dependency outside this repository — Inkwright, which
 writes the file it lays out — and the dependency runs one way: the core knows nothing about it.
 
@@ -165,6 +167,18 @@ with a code and the part it came from, collected in `WordDocument.LoadDiagnostic
 to `LoadOptions.OnWarning`. `DocxFormatException` is thrown only when a package is broken
 beyond recovery: not a zip, no main document part, XML that no longer parses.
 
+Resource refusal is a third, deliberate outcome. `LoadOptions.Budget` is checked before input
+and part allocations and while XML is counted; `DocumentLoadLimitException` names the exact
+ceiling and observed value. The same `DocumentLoadBudget` is used by DOC, HTML, Markdown and RTF
+imports so an upload service can apply one policy. See
+[loading-untrusted-input.md](loading-untrusted-input.md).
+
+OPC media and embedded-object ceilings follow part semantics, not ZIP folder conventions.
+Image/audio/video content types and their relationship roles identify media; `oleObject` and
+`package` relationships identify embeddings even when a valid producer stores the target away
+from `/media/` or `/embeddings/`. The conventional directories remain a defensive fallback for
+malformed or underspecified packages.
+
 A file that is intact but unreadable gets a reason rather than that verdict. An encrypted OOXML
 document is not a zip at all — it is a compound file holding the package as an
 `EncryptedPackage` stream beside the `EncryptionInfo` that unlocks it ([MS-OFFCRYPTO] 2.3.4.4
@@ -254,9 +268,10 @@ What follows is why.
 - **Markdown and HTML are semantic projections, not visual conversions — and they go both
   ways.** Body order, headings, links, lists, tables, notes and pictures survive where the
   target can carry them; pagination and floating geometry do not. The two exports share one
-  paragraph walker, so they agree about fields, revisions and hidden text, and each import
-  mirrors its export so the round trip lands on the same constructs. Every deliberate
-  approximation is returned in the respective diagnostics; the mappings are in
+  paragraph walker, so they agree about fields, revisions and hidden text. Each importer maps
+  the documented subset back into the model; it is not a promise that every export fallback is
+  inverted. Every deliberate export approximation is returned in the respective diagnostics;
+  the mappings and current import boundaries are in
   [markdown-export.md](markdown-export.md), [markdown-import.md](markdown-import.md),
   [html-export.md](html-export.md) and [html-import.md](html-import.md).
 - **HTML is parsed, not pattern-matched.** The projection above is what the *importer* makes

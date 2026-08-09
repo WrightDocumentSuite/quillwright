@@ -43,23 +43,120 @@ public sealed class TextBox : BlockContainer
 /// </remarks>
 public sealed class Shape : InlineObject
 {
+    private static int _generatedDrawingId;
+
     /// <summary>Creates a shape around content that has already been read.</summary>
     /// <param name="fragments">
     /// The verbatim markup, cut at the places the content goes: one piece more than there are
-    /// places, so the content is written between consecutive pieces.
+    /// places, so the content is written between consecutive pieces. A primitive without text
+    /// has one whole fragment and no insertion point.
     /// </param>
     /// <param name="content">The content of the shape.</param>
     public Shape(IReadOnlyList<string> fragments, TextBox content)
     {
         ArgumentNullException.ThrowIfNull(fragments);
         ArgumentNullException.ThrowIfNull(content);
-        if (fragments.Count < 2)
-            throw new ArgumentException("A shape needs markup on both sides of its content.", nameof(fragments));
+        if (fragments.Count < 1)
+            throw new ArgumentException("A shape needs preserved markup.", nameof(fragments));
 
         Fragments = fragments;
         Content = content;
         content.Owner = this;
     }
+
+    /// <summary>Creates an editable floating text box at an explicit page position.</summary>
+    /// <param name="width">Box width.</param>
+    /// <param name="height">Box height.</param>
+    /// <param name="content">Editable paragraphs and tables inside the box.</param>
+    /// <param name="anchor">Absolute placement and wrapping.</param>
+    public static Shape CreateTextBox(
+        Primitives.Length width,
+        Primitives.Length height,
+        TextBox content,
+        PictureAnchor anchor)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(anchor);
+
+        long cx = Math.Max(1, Math.Abs(width.Emu));
+        long cy = Math.Max(1, Math.Abs(height.Emu));
+        string frame = OpenDrawing(cx, cy, anchor, "Fixed-layout text") +
+            $"<wps:wsp><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>" +
+            "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/><a:ln><a:noFill/></a:ln></wps:spPr>" +
+            "<wps:txbx><w:txbxContent>";
+        const string close =
+            "</w:txbxContent></wps:txbx><wps:bodyPr lIns=\"0\" tIns=\"0\" rIns=\"0\" bIns=\"0\" wrap=\"none\" anchor=\"t\"/>" +
+            "</wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>";
+
+        return new Shape([frame, close], content)
+        {
+            Width = width,
+            Height = height,
+            IsInline = false,
+            Anchor = anchor,
+            InsetLeft = Primitives.Length.Zero,
+            InsetRight = Primitives.Length.Zero,
+            InsetTop = Primitives.Length.Zero,
+            InsetBottom = Primitives.Length.Zero,
+        };
+    }
+
+    /// <summary>Creates a floating straight connector at an explicit page position.</summary>
+    /// <param name="width">Horizontal extent.</param>
+    /// <param name="height">Vertical extent.</param>
+    /// <param name="outline">Stroke appearance.</param>
+    /// <param name="anchor">Absolute placement and wrapping.</param>
+    public static Shape CreateLine(
+        Primitives.Length width,
+        Primitives.Length height,
+        Styles.BorderLine outline,
+        PictureAnchor anchor)
+    {
+        ArgumentNullException.ThrowIfNull(outline);
+        ArgumentNullException.ThrowIfNull(anchor);
+
+        long cx = Math.Max(1, Math.Abs(width.Emu));
+        long cy = Math.Max(1, Math.Abs(height.Emu));
+        long stroke = Math.Max(1, outline.Width.Emu);
+        string color = outline.Color.IsAuto ? "000000" : outline.Color.ToHex();
+        string markup = OpenDrawing(cx, cy, anchor, "Fixed-layout line") +
+            $"<wps:wsp><wps:cNvCnPr><a:cxnSpLocks noChangeShapeType=\"1\"/></wps:cNvCnPr><wps:spPr bwMode=\"auto\"><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>" +
+            "<a:prstGeom prst=\"straightConnector1\"><a:avLst/></a:prstGeom><a:noFill/>" +
+            $"<a:ln w=\"{stroke}\"><a:solidFill><a:srgbClr val=\"{color}\"/></a:solidFill><a:round/><a:headEnd/><a:tailEnd/></a:ln></wps:spPr>" +
+            "<wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>";
+
+        return new Shape([markup], new TextBox())
+        {
+            Width = width,
+            Height = height,
+            IsInline = false,
+            Anchor = anchor,
+            Outline = outline,
+            IsLine = true,
+        };
+    }
+
+    private static string OpenDrawing(long cx, long cy, PictureAnchor anchor, string name)
+    {
+        int id = Interlocked.Increment(ref _generatedDrawingId);
+        string horizontal = Origin(anchor.HorizontalFrom, horizontal: true);
+        string vertical = Origin(anchor.VerticalFrom, horizontal: false);
+        string behind = anchor.BehindText ? "1" : "0";
+
+        return FormattableString.Invariant($"""
+            <w:drawing><wp:anchor distT="{anchor.DistanceTop.Emu}" distB="{anchor.DistanceBottom.Emu}" distL="{anchor.DistanceLeft.Emu}" distR="{anchor.DistanceRight.Emu}" simplePos="0" relativeHeight="251658240" behindDoc="{behind}" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="{horizontal}"><wp:posOffset>{anchor.OffsetX.Emu}</wp:posOffset></wp:positionH><wp:positionV relativeFrom="{vertical}"><wp:posOffset>{anchor.OffsetY.Emu}</wp:posOffset></wp:positionV><wp:extent cx="{cx}" cy="{cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/><wp:docPr id="{id}" name="{name} {id}"/><wp:cNvGraphicFramePr/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+            """).Trim();
+    }
+
+    private static string Origin(AnchorOrigin origin, bool horizontal) => origin switch
+    {
+        AnchorOrigin.Page => "page",
+        AnchorOrigin.Margin => "margin",
+        AnchorOrigin.Column when horizontal => "column",
+        AnchorOrigin.Character when horizontal => "character",
+        AnchorOrigin.Line when !horizontal => "line",
+        _ => horizontal ? "column" : "paragraph",
+    };
 
     /// <summary>The verbatim markup around the content.</summary>
     public IReadOnlyList<string> Fragments { get; }
@@ -88,8 +185,23 @@ public sealed class Shape : InlineObject
     /// <summary>Which way the words inside flow: the ordinary way, or down a rotated box.</summary>
     public Styles.TextDirection Direction { get; internal init; }
 
+    /// <summary>Space between the left frame and its text.</summary>
+    public Primitives.Length InsetLeft { get; internal init; } = Primitives.Length.FromPoints(7.2);
+
+    /// <summary>Space between the right frame and its text.</summary>
+    public Primitives.Length InsetRight { get; internal init; } = Primitives.Length.FromPoints(7.2);
+
+    /// <summary>Space between the top frame and its text.</summary>
+    public Primitives.Length InsetTop { get; internal init; } = Primitives.Length.FromPoints(3.6);
+
+    /// <summary>Space between the bottom frame and its text.</summary>
+    public Primitives.Length InsetBottom { get; internal init; } = Primitives.Length.FromPoints(3.6);
+
     /// <summary>The line around the shape, or <see langword="null"/> when it has none.</summary>
     public Styles.BorderLine? Outline { get; internal init; }
+
+    /// <summary>Whether this shape is a straight connector rather than a framed text box.</summary>
+    public bool IsLine { get; internal init; }
 
     /// <summary>The paragraph the shape sits in, once it has been placed.</summary>
     internal Paragraph? Host { get; set; }

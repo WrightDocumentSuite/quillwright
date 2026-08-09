@@ -226,6 +226,150 @@ public class MarkdownImportTests
         Assert.Contains(result.Diagnostics, static w => w.Kind == MarkdownImportWarningKind.ImageSkipped);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ASiblingDirectorySharingTheMediaPrefix_IsNotRead(bool percentEncoded)
+    {
+        string parent = Path.Combine(Path.GetTempPath(), "quillwright-markdown-import-" + Guid.NewGuid().ToString("N"));
+        string media = Path.Combine(parent, "media");
+        string sibling = Path.Combine(parent, "media-private");
+
+        try
+        {
+            Directory.CreateDirectory(media);
+            Directory.CreateDirectory(sibling);
+            string secret = Path.Combine(sibling, "secret.png");
+            File.WriteAllBytes(secret, TestImages.Png);
+            string relative = Path.GetRelativePath(media, secret).Replace('\\', '/');
+            string reference = percentEncoded
+                ? "%2e%2e%2fmedia-private%2fsecret.png"
+                : relative;
+
+            MarkdownImportResult result = MarkdownImporter.Import(
+                $"![secret]({reference})",
+                new MarkdownImportOptions { MediaDirectory = media });
+
+            Assert.Empty(result.Document.Media);
+            Assert.Equal("secret", result.Document.Paragraphs.Single().Text);
+            Assert.Empty(result.Document.Paragraphs.Single().Objects);
+            MarkdownImportWarning warning = Assert.Single(result.Diagnostics);
+            Assert.Equal(MarkdownImportWarningKind.ImageSkipped, warning.Kind);
+            Assert.Equal(reference, warning.Subject);
+            Assert.Equal(1, warning.Line);
+            Assert.Contains("traversal segment", warning.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(parent))
+                Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ASymbolicLinkInsideTheMediaDirectory_IsNotFollowed()
+    {
+        string parent = Path.Combine(Path.GetTempPath(), "quillwright-markdown-link-" + Guid.NewGuid().ToString("N"));
+        string media = Path.Combine(parent, "media");
+        string outside = Path.Combine(parent, "outside");
+        string link = Path.Combine(media, "escape");
+
+        try
+        {
+            Directory.CreateDirectory(media);
+            Directory.CreateDirectory(outside);
+            File.WriteAllBytes(Path.Combine(outside, "secret.png"), TestImages.Png);
+
+            try
+            {
+                Directory.CreateSymbolicLink(link, outside);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+                                          PlatformNotSupportedException or NotSupportedException)
+            {
+                Assert.Skip($"This platform cannot create a directory symbolic link: {error.Message}");
+                return;
+            }
+
+            MarkdownImportResult result = MarkdownImporter.Import(
+                "![secret](escape/secret.png)",
+                new MarkdownImportOptions { MediaDirectory = media });
+
+            Assert.Empty(result.Document.Media);
+            Assert.Equal("secret", result.Document.Paragraphs.Single().Text);
+            Assert.Empty(result.Document.Paragraphs.Single().Objects);
+            MarkdownImportWarning warning = Assert.Single(result.Diagnostics);
+            Assert.Equal(MarkdownImportWarningKind.ImageSkipped, warning.Kind);
+            Assert.Equal("escape/secret.png", warning.Subject);
+            Assert.Equal(1, warning.Line);
+            Assert.Contains("symbolic link", warning.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(link))
+                Directory.Delete(link);
+            if (Directory.Exists(parent))
+                Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void APercentEncodedRelativeImageInsideTheMediaDirectory_IsEmbedded()
+    {
+        string media = Path.Combine(Path.GetTempPath(), "quillwright-markdown-local-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(media, "nested folder"));
+            File.WriteAllBytes(Path.Combine(media, "nested folder", "image.png"), TestImages.Png);
+
+            MarkdownImportResult result = MarkdownImporter.Import(
+                "![local](nested%20folder/image.png)",
+                new MarkdownImportOptions { MediaDirectory = media });
+
+            Assert.Single(result.Document.Media);
+            Assert.True(result.Diagnostics.IsEmpty);
+            Assert.IsType<Picture>(Assert.Single(result.Document.Paragraphs.Single().Objects).Object);
+        }
+        finally
+        {
+            if (Directory.Exists(media))
+                Directory.Delete(media, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AnAbsoluteImagePathInsideTheMediaDirectory_IsStillRejected()
+    {
+        string media = Path.Combine(Path.GetTempPath(), "quillwright-markdown-absolute-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            Directory.CreateDirectory(media);
+            string image = Path.Combine(media, "image.png");
+            File.WriteAllBytes(image, TestImages.Png);
+            string absolute = image.Replace('\\', '/');
+
+            MarkdownImportResult result = MarkdownImporter.Import(
+                $"![local](<{absolute}>)",
+                new MarkdownImportOptions { MediaDirectory = media });
+
+            Assert.Empty(result.Document.Media);
+            Assert.Equal("local", result.Document.Paragraphs.Single().Text);
+            Assert.Empty(result.Document.Paragraphs.Single().Objects);
+            MarkdownImportWarning warning = Assert.Single(result.Diagnostics);
+            Assert.Equal(MarkdownImportWarningKind.ImageSkipped, warning.Kind);
+            Assert.Equal(absolute, warning.Subject);
+            Assert.Equal(1, warning.Line);
+            Assert.Contains("rooted image path", warning.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(media))
+                Directory.Delete(media, recursive: true);
+        }
+    }
+
     [Fact]
     public void ADataUriImage_IsEmbedded()
     {

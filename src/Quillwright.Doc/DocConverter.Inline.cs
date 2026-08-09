@@ -75,7 +75,7 @@ internal static partial class DocConverter
     /// <summary>The picture a placeholder stands for ([MS-DOC] <c>sprmCPicLocation</c>).</summary>
     private static InlineObject? PictureAt(DocReadContext context, int offset)
     {
-        if (DocPictureReader.Read(context.Data, offset) is not { } picture)
+        if (DocPictureReader.Read(context.Data, offset, context.LoadBudget) is not { } picture)
             return Missing(
                 context,
                 WarningCode.UnresolvedMedia,
@@ -107,7 +107,8 @@ internal static partial class DocConverter
     /// </summary>
     private static void ReadEmbeddedObject(DocReadContext context, int number)
     {
-        if (context.Container is { } container && DocObjectPool.Read(container, number) is { } embedded)
+        if (context.Container is { } container &&
+            DocObjectPool.Read(container, number, context.LoadBudget) is { } embedded)
         {
             context.EmbeddedObjects.Add(embedded);
             return;

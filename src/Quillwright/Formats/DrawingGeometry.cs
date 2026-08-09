@@ -59,8 +59,23 @@ internal sealed partial class DrawingGeometry
     /// <summary>Whether the drawing holds words of its own, which makes it a text box.</summary>
     public bool HasText { get; private set; }
 
+    /// <summary>Whether the drawing is a straight line or connector.</summary>
+    public bool IsLine { get; private set; }
+
     /// <summary>Which way the words inside flow (<c>wps:bodyPr@vert</c>, VML <c>layout-flow</c>).</summary>
     public Styles.TextDirection TextFlow { get; private set; }
+
+    /// <summary>Text inset at the left edge; Word's 7.2 point default when omitted.</summary>
+    public Length TextInsetLeft { get; private set; } = Length.FromPoints(7.2);
+
+    /// <summary>Text inset at the right edge; Word's 7.2 point default when omitted.</summary>
+    public Length TextInsetRight { get; private set; } = Length.FromPoints(7.2);
+
+    /// <summary>Text inset at the top edge; Word's 3.6 point default when omitted.</summary>
+    public Length TextInsetTop { get; private set; } = Length.FromPoints(3.6);
+
+    /// <summary>Text inset at the bottom edge; Word's 3.6 point default when omitted.</summary>
+    public Length TextInsetBottom { get; private set; } = Length.FromPoints(3.6);
 
     /// <summary>
     /// Whether the drawing is one image and nothing else. Word writes an image either as a

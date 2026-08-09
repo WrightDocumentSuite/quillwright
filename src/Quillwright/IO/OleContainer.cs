@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using Quillwright.Diagnostics;
 
 namespace Quillwright.IO;
 
@@ -39,7 +40,8 @@ internal static class OleContainer
 
     /// <summary>Reads what the container says about itself, or nothing when it is not one.</summary>
     /// <param name="bytes">The whole storage as a compound file.</param>
-    public static OleDescription? Describe(byte[] bytes)
+    /// <param name="budget">Optional limits inherited from the outer document load.</param>
+    public static OleDescription? Describe(byte[] bytes, DocumentLoadBudget? budget = null)
     {
         if (!CompoundFile.IsCompoundFile(bytes))
             return null;
@@ -47,7 +49,7 @@ internal static class OleContainer
         CompoundFile container;
         try
         {
-            container = CompoundFile.Open(bytes);
+            container = CompoundFile.Open(bytes, budget);
         }
         catch (CompoundFileException)
         {

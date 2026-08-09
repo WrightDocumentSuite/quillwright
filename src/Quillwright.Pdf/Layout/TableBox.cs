@@ -10,6 +10,9 @@ internal sealed class TableBox : BlockBox
     /// <summary>The table this came from.</summary>
     public required Table Source { get; init; }
 
+    /// <summary>The table format after its style chain and direct properties have been resolved.</summary>
+    public required TableFormat Format { get; init; }
+
     /// <summary>The width of each grid column, in points.</summary>
     public required double[] Columns { get; init; }
 
@@ -68,6 +71,9 @@ internal sealed class RowBox
     /// <summary>The row this came from.</summary>
     public required TableRow Source { get; init; }
 
+    /// <summary>The row format after table-style and direct properties have been resolved.</summary>
+    public required TableRowFormat Format { get; init; }
+
     /// <summary>The cells anchored in this row, in grid order. A merged continuation is not one.</summary>
     public required List<CellBox> Cells { get; init; }
 
@@ -76,6 +82,9 @@ internal sealed class RowBox
 
     /// <summary>Whether the row repeats at the top of every page the table continues onto.</summary>
     public bool IsHeader { get; init; }
+
+    /// <summary>Whether Word recorded a page boundary immediately before this row.</summary>
+    public bool StartsNewPage { get; init; }
 
     /// <summary>Whether the row may be broken across a page boundary.</summary>
     public bool CanSplit { get; init; } = true;
@@ -86,6 +95,9 @@ internal sealed class CellBox
 {
     /// <summary>The cell this came from.</summary>
     public required TableCell Source { get; init; }
+
+    /// <summary>The cell format after table-style, conditional and direct properties have been resolved.</summary>
+    public required TableCellFormat Format { get; init; }
 
     /// <summary>The grid column the cell starts at.</summary>
     public required int Column { get; init; }

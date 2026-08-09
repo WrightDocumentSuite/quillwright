@@ -268,7 +268,7 @@ internal static partial class DocConverter
             if (embedded.ProgramId?.StartsWith("MSGraph.", StringComparison.OrdinalIgnoreCase) != true)
                 continue;
 
-            if (GraphChartReader.Read(embedded) is { } chart)
+            if (GraphChartReader.Read(embedded, context.LoadBudget.Budget) is { } chart)
             {
                 document.ChartList.Add(chart);
                 continue;

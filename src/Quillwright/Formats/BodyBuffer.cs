@@ -17,6 +17,7 @@ internal sealed class BodyBuffer
 {
     private readonly LoadContext _context;
     private readonly List<Block> _pending = [];
+    private SectionStart _nextStart = SectionStart.NextPage;
 
     public BodyBuffer(LoadContext context) => _context = context;
 
@@ -54,17 +55,28 @@ internal sealed class BodyBuffer
 
     private void CloseSection(SectionProperties properties)
     {
+        // A sectPr belongs to the section it terminates, except for w:type: OOXML defines that
+        // value as the kind of break which starts the following section.  Keep the public model
+        // convenient for layout (Start means how this section starts) by carrying the parsed
+        // value forward to the next section.
+        SectionStart followingStart = properties.Start;
+        properties.Start = _nextStart;
+
         var section = new Section { Properties = properties };
         foreach (Block block in _pending)
         {
             if (block is Paragraph paragraph)
+            {
+                paragraph.IsSectionBreakCarrier = paragraph.SectionBreak is not null;
                 paragraph.SectionBreak = null;
+            }
             section.Blocks.Add(block);
         }
 
         _pending.Clear();
         _context.Document.Sections.Add(section);
         WireHeadersAndFooters(section, properties);
+        _nextStart = followingStart;
     }
 
     private void WireHeadersAndFooters(Section section, SectionProperties properties)

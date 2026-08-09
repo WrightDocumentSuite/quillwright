@@ -68,6 +68,19 @@ await foreach (string line in reader.ReadTextAsync())
     index.Add(line);
 ```
 
+Streaming does not mean unbounded. Pass `LoadOptions` to the options method to apply
+the same input, ZIP expansion, part-count and XML limits as model loading:
+
+```csharp
+var options = new LoadOptions
+{
+    Budget = DocumentLoadBudget.Default with { MaxInputBytes = 32 * 1024 * 1024 },
+};
+await using DocxReader reader = await DocxReader.OpenWithOptionsAsync(path, options);
+```
+
+See [loading-untrusted-input.md](loading-untrusted-input.md) for the complete budget.
+
 The package is opened asynchronously and the blocks are parsed straight off the decompressed
 stream. Buffering each block into a string and standing up a reader for it was the first
 design, and it allocated eighteen times what loading the whole document did — a good reminder

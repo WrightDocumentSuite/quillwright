@@ -18,15 +18,22 @@ internal static class TableColumns
 {
     /// <summary>Computes the width of every grid column.</summary>
     /// <param name="table">The table.</param>
+    /// <param name="format">Its resolved table formatting.</param>
+    /// <param name="resolver">The style resolver used for row and cell widths.</param>
     /// <param name="available">How much room the container leaves, in points.</param>
     /// <param name="content">The natural widths of the content, or empty to ignore them.</param>
-    public static double[] Compute(Table table, double available, IReadOnlyList<ContentWidth> content)
+    public static double[] Compute(
+        Table table,
+        TableFormat format,
+        StyleResolver resolver,
+        double available,
+        IReadOnlyList<ContentWidth> content)
     {
         int count = Math.Max(1, table.ColumnCount);
-        double target = Target(table, available);
+        double target = Target(format, available);
         double[] widths = FromGrid(table, count);
 
-        Apply(table, widths);
+        Apply(table, resolver, widths);
 
         double stated = widths.Sum();
         if (stated <= 0)
@@ -47,10 +54,10 @@ internal static class TableColumns
     }
 
     /// <summary>How wide the table wants to be, never wider than the room it has.</summary>
-    private static double Target(Table table, double available)
+    private static double Target(TableFormat format, double available)
     {
-        TableWidth? width = table.Format.Width;
-        double indent = table.Format.Indent is { Unit: WidthUnit.Twips } inset ? inset.Length.Points : 0;
+        TableWidth? width = format.Width;
+        double indent = format.Indent is { Unit: WidthUnit.Twips } inset ? inset.Length.Points : 0;
         double room = Math.Max(1, available - Math.Max(0, indent));
 
         double wanted = width switch
@@ -76,15 +83,16 @@ internal static class TableColumns
     /// Lets a cell that states an absolute width of its own correct the grid. Only a cell that
     /// covers one column can speak for that column on its own.
     /// </summary>
-    private static void Apply(Table table, double[] widths)
+    private static void Apply(Table table, StyleResolver resolver, double[] widths)
     {
         foreach (TableRow row in table.Rows)
         {
-            int column = row.Format.GridBefore ?? 0;
+            int column = resolver.ResolveTableRowFormat(row).GridBefore ?? 0;
             foreach (TableCell cell in row.Cells)
             {
-                int span = Math.Max(1, cell.Format.GridSpan ?? 1);
-                if (span == 1 && column < widths.Length && cell.Format.Width is { Unit: WidthUnit.Twips } stated)
+                TableCellFormat cellFormat = resolver.ResolveTableCellFormat(cell);
+                int span = Math.Max(1, cellFormat.GridSpan ?? 1);
+                if (span == 1 && column < widths.Length && cellFormat.Width is { Unit: WidthUnit.Twips } stated)
                     widths[column] = Math.Max(widths[column], stated.Length.Points);
 
                 column += span;

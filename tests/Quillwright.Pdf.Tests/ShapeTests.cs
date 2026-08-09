@@ -94,6 +94,27 @@ public sealed class ShapeTests
     }
 
     [Fact]
+    public void AStraightConnectorIsDrawnAsOneLineRatherThanAFlatBox()
+    {
+        WordDocument document = WordDocument.Create();
+        var line = new Shape(["<wps:wsp/>"], new TextBox())
+        {
+            Width = Length.FromPoints(200),
+            Height = Length.FromPoints(0.05),
+            IsLine = true,
+            Outline = BorderLine.Single(Length.FromPoints(2.25), WordColor.FromRgb(0x000000)),
+        };
+        document.Sections[0].AddParagraph().AppendObject(line);
+
+        using Rendered rendered = Rendered.Of(document);
+        string content = Encoding.Latin1.GetString(rendered.Document.Pages[0].GetContent());
+
+        Assert.Equal(1, content.Split("\nS\n", StringSplitOptions.None).Length - 1);
+        Assert.Contains("2.25 w", content, StringComparison.Ordinal);
+        Assert.DoesNotContain(" re", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AFloatingBoxSitsWhereItsAnchorSays()
     {
         WordDocument document = WordDocument.Create();
@@ -115,6 +136,31 @@ public sealed class ShapeTests
 
         PdfLetter first = rendered.Letters().First(letter => letter.Text == "I");
         Assert.Equal(100 + SideInset, first.Origin.X, 0.6);
+    }
+
+    [Fact]
+    public void AGeneratedZeroInsetBoxUsesItsWholeFrame()
+    {
+        var content = new TextBox();
+        content.AddParagraph("Exact");
+        var anchor = new PictureAnchor
+        {
+            HorizontalFrom = AnchorOrigin.Page,
+            VerticalFrom = AnchorOrigin.Page,
+            OffsetX = Length.FromPoints(40),
+            OffsetY = Length.FromPoints(60),
+            Wrapping = TextWrapping.None,
+        };
+        Shape shape = Shape.CreateTextBox(
+            Length.FromPoints(100), Length.FromPoints(20), content, anchor);
+        WordDocument document = WordDocument.Create();
+        document.Sections[0].AddParagraph().AppendObject(shape);
+
+        using Rendered rendered = Rendered.Of(document);
+
+        PdfLetter first = rendered.Letters().First(letter => letter.Text == "E");
+        Assert.Equal(40, first.Origin.X, 0.6);
+        Assert.DoesNotContain(rendered.Diagnostics, warning => warning.Subject == "shape-overflow");
     }
 
     [Fact]

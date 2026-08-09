@@ -11,8 +11,8 @@
     that has both checkouts, which is nobody who clones this.
   -->
   <ItemGroup Label="PDF">
-    <PackageVersion Include="Inkwright" Version="0.1.2" />
-    <PackageVersion Include="Inkwright.Layout" Version="0.1.2" />
+    <PackageVersion Include="Inkwright" Version="0.1.3" />
+    <PackageVersion Include="Inkwright.Layout" Version="0.1.3" />
   </ItemGroup>
 
   <ItemGroup Label="Testing">

@@ -1,4 +1,5 @@
 using Quillwright.Model;
+using Quillwright.Diagnostics;
 
 namespace Quillwright.Doc;
 
@@ -24,17 +25,20 @@ internal sealed class OfficeArtBlipStore
     private readonly byte[]? _delayed;
     private readonly OfficeArtRecord[] _entries;
     private readonly ImageData?[] _images;
+    private readonly DocumentLoadBudgetState? _loadBudget;
 
-    private OfficeArtBlipStore(byte[] table, byte[]? delayed, OfficeArtRecord[] entries)
+    private OfficeArtBlipStore(
+        byte[] table, byte[]? delayed, OfficeArtRecord[] entries, DocumentLoadBudgetState? loadBudget)
     {
         _table = table;
         _delayed = delayed;
         _entries = entries;
         _images = new ImageData?[entries.Length];
+        _loadBudget = loadBudget;
     }
 
     /// <summary>A document that draws nothing.</summary>
-    public static OfficeArtBlipStore Empty { get; } = new([], null, []);
+    public static OfficeArtBlipStore Empty { get; } = new([], null, [], null);
 
     /// <summary>How many images the document keeps.</summary>
     public int Count => _entries.Length;
@@ -43,7 +47,12 @@ internal sealed class OfficeArtBlipStore
     /// <param name="table">The table stream.</param>
     /// <param name="region">Where the drawings live, and how long they are.</param>
     /// <param name="delayed">The stream images may have been left in, rather than stored inline.</param>
-    public static OfficeArtBlipStore Read(byte[] table, (int Offset, int Length) region, byte[]? delayed)
+    /// <param name="loadBudget">Optional counters for decoded image payloads.</param>
+    public static OfficeArtBlipStore Read(
+        byte[] table,
+        (int Offset, int Length) region,
+        byte[]? delayed,
+        DocumentLoadBudgetState? loadBudget = null)
     {
         (int offset, int length) = region;
         if (length <= 0 || offset < 0 || offset + length > table.Length)
@@ -58,7 +67,7 @@ internal sealed class OfficeArtBlipStore
             ? [.. found.Children(table).Where(static r => OfficeArtBlip.IsEntry(r.Type))]
             : [];
 
-        return new OfficeArtBlipStore(table, delayed, entries);
+        return new OfficeArtBlipStore(table, delayed, entries, loadBudget);
     }
 
     /// <summary>The image a shape displays, wherever it keeps it.</summary>
@@ -73,12 +82,13 @@ internal sealed class OfficeArtBlipStore
         if (index < 1 || index > _entries.Length)
             return null;
 
-        return _images[index - 1] ??= OfficeArtBlip.Resolve(_table, _entries[index - 1], _delayed);
+        return _images[index - 1] ??= OfficeArtBlip.Resolve(
+            _table, _entries[index - 1], _delayed, _loadBudget);
     }
 
     /// <summary>An image a shape carried itself rather than taking from the list.</summary>
     private ImageData? Inline(int offset) =>
         OfficeArtRecord.TryRead(_table, offset, _table.Length, out OfficeArtRecord record)
-            ? OfficeArtBlip.Resolve(_table, record, _delayed)
+            ? OfficeArtBlip.Resolve(_table, record, _delayed, _loadBudget)
             : null;
 }

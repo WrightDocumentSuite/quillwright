@@ -75,6 +75,12 @@ internal sealed class TextLineItem : PageItem
 
     /// <summary>How long the strip of a turned line is, which is where reading upwards starts.</summary>
     public double Length { get; init; }
+
+    /// <summary>
+    /// Whether comment fragments are emitted as annotations while this line is painted. Furniture
+    /// and turned text deliberately leave this false because they can be repeated or transformed.
+    /// </summary>
+    public bool PaintComments { get; init; }
 }
 
 /// <summary>A picture placed on the page.</summary>
@@ -93,6 +99,9 @@ internal sealed class ImageItem : PageItem
 /// <summary>A clickable area, turned into a link annotation rather than into content.</summary>
 internal sealed class LinkItem : PageItem
 {
+    /// <summary>The Word hyperlink whose fragments this clickable area covers.</summary>
+    public required Hyperlink Link { get; init; }
+
     /// <summary>How wide the clickable area is.</summary>
     public required double Width { get; init; }
 
