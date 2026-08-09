@@ -28,17 +28,41 @@
     that installs and then silently generates nothing. Inside a target that runs as pack
     gathers its files, the build has already happened and the assembly is there.
 
-    The path is taken from the @(Analyzer) the ProjectReference above contributes, so it stays
-    correct whatever UseArtifactsOutput does with the output directory.
+    Resolve the generator ProjectReference's target path explicitly, so it stays correct whatever
+    UseArtifactsOutput does with the output directory. Pack does not resolve project-reference
+    outputs when NoBuild=true; in that mode @(Analyzer) contains only the SDK analyzers.
   -->
-  <Target Name="PackTheGenerator" BeforeTargets="_GetPackageFiles">
+  <Target Name="PackTheGenerator"
+          BeforeTargets="_GetPackageFiles"
+          DependsOnTargets="PrepareProjectReferences">
     <ItemGroup>
-      <None Include="@(Analyzer)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false"
-            Condition="'%(Filename)' == 'Quillwright.Templates.Generator'" />
+      <_TemplateGeneratorProject Include="@(_MSBuildProjectReferenceExistent)"
+                                 Condition="'%(Filename)' == 'Quillwright.Templates.Generator'" />
     </ItemGroup>
 
-    <Error Condition="'@(Analyzer)' == ''"
-           Text="The source generator was not built, so this package would ship without it." />
+    <Error Condition="'@(_TemplateGeneratorProject)' == ''"
+           Text="The Quillwright.Templates.Generator project reference could not be resolved, so this package would ship without its source generator." />
+
+    <MSBuild Projects="@(_TemplateGeneratorProject)"
+             Targets="GetTargetPath"
+             BuildInParallel="$(BuildInParallel)"
+             Properties="%(_TemplateGeneratorProject.SetConfiguration); %(_TemplateGeneratorProject.SetPlatform); %(_TemplateGeneratorProject.SetTargetFramework)"
+             RemoveProperties="%(_TemplateGeneratorProject.GlobalPropertiesToRemove)$(_GlobalPropertiesToRemoveFromProjectReferences)"
+             Condition="'@(_TemplateGeneratorProject)' != ''">
+      <Output TaskParameter="TargetOutputs" ItemName="_TemplateGenerator" />
+    </MSBuild>
+
+    <ItemGroup>
+      <None Include="@(_TemplateGenerator)"
+            Pack="true"
+            PackagePath="analyzers/dotnet/cs"
+            Visible="false" />
+    </ItemGroup>
+
+    <Error Condition="'@(_TemplateGenerator)' == ''"
+           Text="Quillwright.Templates.Generator did not report an output assembly, so this package would ship without its source generator." />
+    <Error Condition="'@(_TemplateGenerator)' != '' and !Exists('%(_TemplateGenerator.Identity)')"
+           Text="Quillwright.Templates.Generator was resolved to '%(_TemplateGenerator.Identity)', but the assembly does not exist. Build the generator project before packing Quillwright.Templates." />
   </Target>
 
 </Project>
