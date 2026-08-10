@@ -6,12 +6,14 @@ internal ref struct RtfTokenizer
     private const int MaximumParameterDigits = 10;
 
     private readonly ReadOnlySpan<byte> _input;
+    private readonly CancellationToken _cancellationToken;
     private int _offset;
     private int _pendingBinaryLength;
 
-    public RtfTokenizer(ReadOnlySpan<byte> input)
+    public RtfTokenizer(ReadOnlySpan<byte> input, CancellationToken cancellationToken = default)
     {
         _input = input;
+        _cancellationToken = cancellationToken;
         _offset = 0;
         _pendingBinaryLength = -1;
     }
@@ -20,6 +22,7 @@ internal ref struct RtfTokenizer
 
     public bool TryRead(out RtfToken token)
     {
+        _cancellationToken.ThrowIfCancellationRequested();
         if (_pendingBinaryLength >= 0)
         {
             int binaryStart = _offset;
@@ -33,7 +36,10 @@ internal ref struct RtfTokenizer
         }
 
         while (_offset < _input.Length && _input[_offset] is (byte)'\r' or (byte)'\n')
+        {
+            CheckCancellation();
             _offset++;
+        }
 
         if (_offset >= _input.Length)
         {
@@ -55,7 +61,10 @@ internal ref struct RtfTokenizer
                 return ReadControl(start, out token);
             default:
                 while (_offset < _input.Length && _input[_offset] is not ((byte)'{' or (byte)'}' or (byte)'\\' or (byte)'\r' or (byte)'\n'))
+                {
+                    CheckCancellation();
                     _offset++;
+                }
                 token = new RtfToken(RtfTokenKind.Text, start, _offset - start);
                 return true;
         }
@@ -72,11 +81,14 @@ internal ref struct RtfTokenizer
 
         int nameStart = _offset++;
         while (_offset < _input.Length && IsAsciiLetter(_input[_offset]))
+        {
+            CheckCancellation();
+            if (_offset - nameStart >= MaximumControlWordLength)
+                throw new RtfFormatException("An RTF control word is longer than 32 letters", nameStart);
             _offset++;
+        }
 
         int nameLength = _offset - nameStart;
-        if (nameLength > MaximumControlWordLength)
-            throw new RtfFormatException("An RTF control word is longer than 32 letters", nameStart);
 
         bool negative = _offset < _input.Length && _input[_offset] == (byte)'-';
         if (negative)
@@ -146,6 +158,12 @@ internal ref struct RtfTokenizer
         value is >= (byte)'a' and <= (byte)'z' or >= (byte)'A' and <= (byte)'Z';
 
     private static bool IsAsciiDigit(byte value) => value is >= (byte)'0' and <= (byte)'9';
+
+    private void CheckCancellation()
+    {
+        if ((_offset & 0xFFF) == 0)
+            _cancellationToken.ThrowIfCancellationRequested();
+    }
 
     private static bool TryHex(byte value, out int result)
     {

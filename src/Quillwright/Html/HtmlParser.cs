@@ -34,6 +34,16 @@ internal static class HtmlParser
         return new HtmlTreeBuilder(html, budget).Build();
     }
 
+    internal static HtmlElement ParseWithCancellation(
+        string html,
+        DocumentLoadBudgetState? budget,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(html);
+        cancellationToken.ThrowIfCancellationRequested();
+        return new HtmlTreeBuilder(html, budget, cancellationToken).Build();
+    }
+
     /// <summary>Parses markup using an element as the HTML fragment context.</summary>
     /// <param name="html">The fragment markup.</param>
     /// <param name="contextElement">The context element's local name.</param>
@@ -53,6 +63,24 @@ internal static class HtmlParser
             : contextElement;
         var context = new HtmlElement(localName, contextNamespace);
         return new HtmlTreeBuilder(html, context, budget).Build();
+    }
+
+    internal static HtmlElement ParseFragmentWithCancellation(
+        string html,
+        string contextElement,
+        HtmlNamespace contextNamespace = HtmlNamespace.Html,
+        DocumentLoadBudgetState? budget = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(html);
+        ArgumentException.ThrowIfNullOrEmpty(contextElement);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        string localName = contextNamespace == HtmlNamespace.Html
+            ? AsciiLower(contextElement)
+            : contextElement;
+        var context = new HtmlElement(localName, contextNamespace);
+        return new HtmlTreeBuilder(html, context, budget, cancellationToken).Build();
     }
 
     private static string AsciiLower(string value)

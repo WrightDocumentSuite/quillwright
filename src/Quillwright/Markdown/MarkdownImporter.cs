@@ -9,7 +9,7 @@ namespace Quillwright.Markdown;
 
 /// <summary>
 /// Turns Markdown into a document: CommonMark's blocks and inlines, and the GitHub extensions
-/// a table, a strikethrough and a task list come from, mapped onto the same styles the
+/// a table, a strikethrough, a task list and footnotes come from, mapped onto the same styles the
 /// exporter reads back — so <c>Import</c> and <c>ToMarkdown</c> are inverses as far as the two
 /// formats can be.
 /// </summary>
@@ -26,19 +26,33 @@ public static class MarkdownImporter
     /// <param name="markdown">The Markdown source.</param>
     /// <param name="options">How to import it, or <see langword="null"/> for the defaults.</param>
     public static MarkdownImportResult Import(string markdown, MarkdownImportOptions? options = null)
+        => ImportCore(markdown, options, CancellationToken.None);
+
+    private static MarkdownImportResult ImportCore(
+        string markdown, MarkdownImportOptions? options, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(markdown);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        var context = new ImportContext(options ?? new MarkdownImportOptions());
+        var context = new ImportContext(options ?? new MarkdownImportOptions(), cancellationToken);
         context.Budget.ValidateText(markdown);
         List<Line> lines = Split(markdown);
         SkipFrontMatter(lines, context);
+        CollectNoteDefinitions(lines, context);
         CollectDefinitions(lines, context);
 
-        context.Parser = new MarkdownInlineParser(context.Definitions, context.ResolveImage, context.Budget);
+        context.Parser = new MarkdownInlineParser(
+            context.Definitions,
+            context.ResolveImage,
+            context.AppendNoteReference,
+            context.ReportRawHtml,
+            context.Budget,
+            cancellationToken);
         ParseBlocks(
             lines, 0, lines.Count, context, context.Document.Sections[0].Blocks,
             quoted: false, listDepth: -1, markupDepth: 1);
+        ParseNoteBodies(context);
+        ReportUnusedNoteDefinitions(context);
 
         if (context.Document.Sections[0].Blocks.Count == 0)
             context.Document.Sections[0].AddParagraph(string.Empty);
@@ -62,20 +76,25 @@ public static class MarkdownImporter
         if (options.MediaDirectory is null)
             options = options with { MediaDirectory = Path.GetDirectoryName(Path.GetFullPath(path)) };
 
-        return Import(markdown, options);
+        return ImportCore(markdown, options, cancellationToken);
     }
 
     private sealed class ImportContext
     {
-        public ImportContext(MarkdownImportOptions options)
+        public ImportContext(MarkdownImportOptions options, CancellationToken cancellationToken)
         {
             Options = options;
             Budget = new DocumentLoadBudgetState(options.Budget);
+            CancellationToken = cancellationToken;
+            FootnoteIds = new NoteIdAllocator(Document.FootnoteList);
+            EndnoteIds = new NoteIdAllocator(Document.EndnoteList);
         }
 
         public MarkdownImportOptions Options { get; }
 
         public DocumentLoadBudgetState Budget { get; }
+
+        public CancellationToken CancellationToken { get; }
 
         public WordDocument Document { get; } = WordDocument.Create();
 
@@ -83,11 +102,84 @@ public static class MarkdownImporter
 
         public Dictionary<string, (string Url, string? Title)> Definitions { get; } = [];
 
+        public Dictionary<string, NoteDefinition> NoteDefinitions { get; } = [];
+
+        public Dictionary<string, ImportedNote> NotesByLabel { get; } = [];
+
+        public List<ImportedNote> PendingNoteBodies { get; } = [];
+
+        public HashSet<string> ReportedMissingNotes { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<(int Line, string Html)> ReportedRawHtml { get; } = [];
+
         public MarkdownInlineParser Parser { get; set; } = null!;
 
         public int BulletList { get; set; } = -1;
 
         public int OrderedList { get; set; } = -1;
+
+        private NoteIdAllocator FootnoteIds { get; }
+
+        private NoteIdAllocator EndnoteIds { get; }
+
+        public bool AppendNoteReference(Paragraph paragraph, string? label, string raw, int line)
+        {
+            CancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                Diagnostics.Add(
+                    MarkdownImportWarningKind.FootnoteMalformed,
+                    "A footnote reference has no valid closing label and was kept as text",
+                    Snippet(raw), line);
+                return false;
+            }
+
+            string key = MarkdownInlineParser.LabelKey(label);
+            if (!NoteDefinitions.TryGetValue(key, out NoteDefinition? definition))
+            {
+                if (ReportedMissingNotes.Add(key))
+                {
+                    Diagnostics.Add(
+                        MarkdownImportWarningKind.FootnoteDangling,
+                        "A footnote reference has no definition and was kept as text",
+                        label, line);
+                }
+
+                return false;
+            }
+
+            if (!NotesByLabel.TryGetValue(key, out ImportedNote? imported))
+            {
+                (bool isEndnote, int? preferredId) = NoteIdentity(definition.Label);
+                List<Note> notes = isEndnote ? Document.EndnoteList : Document.FootnoteList;
+                EnsureNoteSeparators(Document, notes, isEndnote);
+                int id = (isEndnote ? EndnoteIds : FootnoteIds).Allocate(preferredId);
+                var note = new Note(Document, isEndnote) { Id = id };
+                notes.Add(note);
+
+                imported = new ImportedNote(definition, note);
+                NotesByLabel.Add(key, imported);
+                PendingNoteBodies.Add(imported);
+            }
+
+            string referenceStyle = imported.Note.IsEndnote ? "EndnoteReference" : "FootnoteReference";
+            Document.Styles.GetOrAdd(referenceStyle, StyleKind.Character);
+            paragraph.AppendObject(
+                new NoteReference { IsEndnote = imported.Note.IsEndnote, Id = imported.Note.Id },
+                RunFormat.Default with { StyleId = referenceStyle });
+            return true;
+        }
+
+        public void ReportRawHtml(string html, int line)
+        {
+            if (!ReportedRawHtml.Add((line, html)))
+                return;
+
+            Diagnostics.Add(
+                MarkdownImportWarningKind.HtmlKeptAsText,
+                "Raw inline HTML was kept as literal document text; its browser semantics were not applied",
+                Snippet(html), line);
+        }
 
         public ImageData? ResolveImage(string url, string? alt, int line)
         {
@@ -204,6 +296,15 @@ public static class MarkdownImporter
         public Line Strip(int columns) => new(Text.Length <= columns ? string.Empty : Text[columns..], Number);
     }
 
+    private sealed record NoteDefinition(string Label, string Key, List<Line> Body, int Line);
+
+    private sealed class ImportedNote(NoteDefinition definition, Note note)
+    {
+        public NoteDefinition Definition { get; } = definition;
+
+        public Note Note { get; } = note;
+    }
+
     private static List<Line> Split(string markdown)
     {
         var lines = new List<Line>();
@@ -237,33 +338,186 @@ public static class MarkdownImporter
     }
 
     /// <summary>
+    /// GitHub footnote definitions deliberately look like CommonMark link definitions. Pull
+    /// them out first, keeping first-definition-wins and the four-space continuation used by
+    /// the exporter. The formal GFM specification does not define this platform extension.
+    /// </summary>
+    private static void CollectNoteDefinitions(List<Line> lines, ImportContext context)
+    {
+        (char Kind, int Length)? activeFence = null;
+        var retained = new List<Line>(lines.Count);
+        int i = 0;
+        while (i < lines.Count)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            string text = lines[i].Text;
+            string trimmed = text.TrimStart();
+            int indent = text.Length - trimmed.Length;
+            if (indent <= 3 && Fence(trimmed) is { } fence)
+            {
+                if (activeFence is null)
+                {
+                    activeFence = fence;
+                }
+                else if (fence.Kind == activeFence.Value.Kind &&
+                         fence.Length >= activeFence.Value.Length &&
+                         trimmed.AsSpan(fence.Length).Trim().Length == 0)
+                {
+                    activeFence = null;
+                }
+
+                retained.Add(lines[i]);
+                i++;
+                continue;
+            }
+
+            if (activeFence is not null || indent > 3 || !trimmed.StartsWith("[^", StringComparison.Ordinal))
+            {
+                retained.Add(lines[i]);
+                i++;
+                continue;
+            }
+
+            if (!TryNoteDefinitionStart(trimmed, out string? label, out string? first))
+            {
+                if (trimmed.Contains(":", StringComparison.Ordinal))
+                {
+                    context.Diagnostics.Add(
+                        MarkdownImportWarningKind.FootnoteMalformed,
+                        "A malformed footnote definition was kept as text",
+                        Snippet(trimmed), lines[i].Number);
+                }
+
+                retained.Add(lines[i]);
+                i++;
+                continue;
+            }
+
+            int definitionLine = lines[i].Number;
+            var body = new List<Line> { new(first, definitionLine) };
+            int end = i + 1;
+            while (end < lines.Count)
+            {
+                context.CancellationToken.ThrowIfCancellationRequested();
+                string continuation = lines[end].Text;
+                int continuationIndent = continuation.Length - continuation.TrimStart().Length;
+                if (continuationIndent >= 4)
+                {
+                    body.Add(lines[end].Strip(4));
+                    end++;
+                    continue;
+                }
+
+                if (continuation.Trim().Length == 0)
+                {
+                    int next = end + 1;
+                    while (next < lines.Count && lines[next].Text.Trim().Length == 0)
+                        next++;
+                    if (next < lines.Count &&
+                        lines[next].Text.Length - lines[next].Text.TrimStart().Length >= 4)
+                    {
+                        for (; end < next; end++)
+                            body.Add(lines[end] with { Text = string.Empty });
+                        continue;
+                    }
+                }
+
+                break;
+            }
+
+            string key = MarkdownInlineParser.LabelKey(label);
+            context.Budget.AddMarkupNode();
+            if (!context.NoteDefinitions.TryAdd(key, new NoteDefinition(label, key, body, definitionLine)))
+            {
+                context.Diagnostics.Add(
+                    MarkdownImportWarningKind.FootnoteMalformed,
+                    "A duplicate footnote definition was ignored; the first definition wins",
+                    label, definitionLine);
+            }
+
+            i = end;
+        }
+
+        lines.Clear();
+        lines.AddRange(retained);
+    }
+
+    private static bool TryNoteDefinitionStart(string text, out string label, out string first)
+    {
+        label = string.Empty;
+        first = string.Empty;
+        int close = text.IndexOf("]:", 2, StringComparison.Ordinal);
+        if (close <= 2)
+            return false;
+
+        label = text[2..close].Trim();
+        if (label.Length == 0 || label.Contains('[') || label.Contains(']') || label.Contains('\n'))
+            return false;
+
+        int content = close + 2;
+        if (content < text.Length && text[content] is ' ' or '\t')
+            content++;
+        first = text[content..];
+        return true;
+    }
+
+    /// <summary>
     /// Link reference definitions, collected up front and removed, because a reference may sit
     /// before the definition it uses.
     /// </summary>
     private static void CollectDefinitions(List<Line> lines, ImportContext context)
     {
-        bool fenced = false;
-        for (int i = lines.Count - 1; i >= 0; i--)
+        (char Kind, int Length)? activeFence = null;
+        var retained = new List<Line>(lines.Count);
+        foreach (Line line in lines)
         {
-            string text = lines[i].Text;
-            if (Fence(text) is not null)
-                fenced = !fenced;
-
-            if (fenced)
-                continue;
-
+            context.CancellationToken.ThrowIfCancellationRequested();
+            string text = line.Text;
             string trimmed = text.TrimStart();
-            if (text.Length - trimmed.Length > 3 || !trimmed.StartsWith('['))
+            int indent = text.Length - trimmed.Length;
+            if (indent <= 3 && Fence(trimmed) is { } fence)
+            {
+                if (activeFence is null)
+                {
+                    activeFence = fence;
+                }
+                else if (fence.Kind == activeFence.Value.Kind &&
+                         fence.Length >= activeFence.Value.Length &&
+                         trimmed.AsSpan(fence.Length).Trim().Length == 0)
+                {
+                    activeFence = null;
+                }
+
+                retained.Add(line);
                 continue;
+            }
+
+            if (activeFence is not null || indent > 3 || !trimmed.StartsWith('['))
+            {
+                retained.Add(line);
+                continue;
+            }
 
             int close = trimmed.IndexOf("]:", StringComparison.Ordinal);
             if (close <= 1)
+            {
+                retained.Add(line);
                 continue;
+            }
 
             string label = trimmed[1..close];
+            if (label.StartsWith('^'))
+            {
+                retained.Add(line);
+                continue;
+            }
+
             string rest = trimmed[(close + 2)..].Trim();
             if (rest.Length == 0)
+            {
+                retained.Add(line);
                 continue;
+            }
 
             string url;
             string? title = null;
@@ -279,13 +533,161 @@ public static class MarkdownImporter
                 if (remainder.Length >= 2 && (remainder[0] is '"' or '\'') && remainder[^1] == remainder[0])
                     title = remainder[1..^1];
                 else
+                {
+                    retained.Add(line);
                     continue;
+                }
             }
 
             context.Budget.AddMarkupNode();
-            context.Definitions[MarkdownInlineParser.LabelKey(label)] = (url.Trim('<', '>'), title);
-            lines.RemoveAt(i);
+            context.Definitions.TryAdd(
+                MarkdownInlineParser.LabelKey(label),
+                (url.Trim('<', '>'), title));
         }
+
+        lines.Clear();
+        lines.AddRange(retained);
+    }
+
+    /// <summary>
+    /// Note bodies are expanded from a growing queue. A body may refer to a later note (or to
+    /// itself), but parsing never follows that edge recursively.
+    /// </summary>
+    private static void ParseNoteBodies(ImportContext context)
+    {
+        for (int index = 0; index < context.PendingNoteBodies.Count; index++)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            ImportedNote imported = context.PendingNoteBodies[index];
+            Note note = imported.Note;
+            ParseBlocks(
+                imported.Definition.Body,
+                0,
+                imported.Definition.Body.Count,
+                context,
+                note.Blocks,
+                quoted: false,
+                listDepth: -1,
+                markupDepth: 1);
+
+            if (note.Blocks.Count == 0)
+                note.AddParagraph(string.Empty);
+
+            string textStyle = note.IsEndnote ? "EndnoteText" : "FootnoteText";
+            string referenceStyle = note.IsEndnote ? "EndnoteReference" : "FootnoteReference";
+            context.Document.Styles.GetOrAdd(textStyle);
+            context.Document.Styles.GetOrAdd(referenceStyle, StyleKind.Character);
+
+            Paragraph first;
+            if (note.Blocks[0] is Paragraph paragraph)
+            {
+                first = paragraph;
+            }
+            else
+            {
+                first = new Paragraph();
+                note.Blocks.Insert(0, first);
+                context.Budget.AddMarkupNode();
+            }
+
+            if (first.Format.StyleId is null)
+                first.Format = first.Format with { StyleId = textStyle };
+            first.InsertObject(
+                0,
+                new NoteNumberMark { IsEndnote = note.IsEndnote },
+                RunFormat.Default with { StyleId = referenceStyle });
+        }
+    }
+
+    private static void ReportUnusedNoteDefinitions(ImportContext context)
+    {
+        foreach (NoteDefinition definition in context.NoteDefinitions.Values.OrderBy(static item => item.Line))
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            if (context.NotesByLabel.ContainsKey(definition.Key))
+                continue;
+
+            context.Diagnostics.Add(
+                MarkdownImportWarningKind.FootnoteDangling,
+                "A footnote definition has no reference and was not added to the document",
+                definition.Label, definition.Line);
+        }
+    }
+
+    private static (bool IsEndnote, int? PreferredId) NoteIdentity(string label)
+    {
+        const string EndnotePrefix = "en-";
+        bool endnote = label.StartsWith(EndnotePrefix, StringComparison.OrdinalIgnoreCase) &&
+                       label.Length > EndnotePrefix.Length &&
+                       label.AsSpan(EndnotePrefix.Length).IndexOfAnyExceptInRange('0', '9') < 0;
+        string prefix = endnote ? EndnotePrefix : "fn-";
+        if (!label.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+            !int.TryParse(label.AsSpan(prefix.Length), out int id) || id < 1)
+        {
+            return (endnote, null);
+        }
+
+        return (endnote, id);
+    }
+
+    private sealed class NoteIdAllocator
+    {
+        private readonly HashSet<int> _used;
+        private int _next;
+
+        public NoteIdAllocator(IEnumerable<Note> notes)
+        {
+            _used = new HashSet<int>();
+            int maximum = 0;
+            foreach (Note note in notes)
+            {
+                _used.Add(note.Id);
+                if (note.Id > maximum && note.Id < int.MaxValue)
+                    maximum = note.Id;
+            }
+
+            _next = maximum + 1;
+            AdvanceToAvailable();
+        }
+
+        public int Allocate(int? preferred)
+        {
+            if (preferred is int candidate && candidate > 0 && _used.Add(candidate))
+            {
+                if (candidate >= _next && candidate < int.MaxValue)
+                    _next = candidate + 1;
+                AdvanceToAvailable();
+                return candidate;
+            }
+
+            int allocated = _next;
+            _used.Add(allocated);
+            AdvanceToAvailable();
+            return allocated;
+        }
+
+        private void AdvanceToAvailable()
+        {
+            while (_used.Contains(_next))
+            {
+                _next = _next == int.MaxValue ? 1 : _next + 1;
+                if (_next == int.MaxValue && _used.Count == int.MaxValue)
+                    throw new InvalidOperationException("No positive note identifier is available.");
+            }
+        }
+    }
+
+    private static void EnsureNoteSeparators(WordDocument document, List<Note> notes, bool isEndnote)
+    {
+        if (notes.Count > 0)
+            return;
+
+        var separator = new Note(document, isEndnote) { Id = -1, Kind = NoteKind.Separator };
+        separator.AddParagraph().AppendObject(new NoteSeparator());
+        var continuation = new Note(document, isEndnote) { Id = 0, Kind = NoteKind.ContinuationSeparator };
+        continuation.AddParagraph().AppendObject(new NoteSeparator { IsContinuation = true });
+        notes.Add(separator);
+        notes.Add(continuation);
     }
 
     private static void ParseBlocks(
@@ -299,6 +701,7 @@ public static class MarkdownImporter
         int markupDepth)
     {
         context.Budget.EnsureMarkupDepth(markupDepth);
+        context.CancellationToken.ThrowIfCancellationRequested();
         int i = from;
         var paragraph = new List<Line>();
 
@@ -313,6 +716,7 @@ public static class MarkdownImporter
 
         while (i < to)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             Line line = lines[i];
             string text = line.Text;
             string trimmed = text.TrimStart();
@@ -398,14 +802,6 @@ public static class MarkdownImporter
         if (quoted)
         {
             paragraph.Format = paragraph.Format with { StyleId = context.Document.Styles.GetOrAdd("Quote").Id };
-        }
-
-        if (inline.TrimStart().StartsWith('<'))
-        {
-            context.Diagnostics.Add(
-                MarkdownImportWarningKind.HtmlKeptAsText,
-                "Raw HTML has no interpreter here and was kept as the text it is",
-                Snippet(inline), source[0].Number);
         }
 
         context.Parser.Fill(paragraph, inline, RunFormat.Default, source[0].Number);

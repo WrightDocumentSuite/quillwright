@@ -1,6 +1,8 @@
 using System.Buffers;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
+using Quillwright.Diagnostics;
 using Quillwright.Model;
 using Quillwright.Primitives;
 using Quillwright.Styles;
@@ -10,6 +12,8 @@ namespace Quillwright.Rtf.Parsing;
 internal sealed class RtfParser
 {
     private readonly RtfImportOptions _options;
+    private readonly CancellationToken _cancellationToken;
+    private readonly DocumentLoadBudgetState _loadBudget;
     private readonly RtfImportDiagnostics _diagnostics = new();
     private readonly ArrayBufferWriter<byte> _encodedText = new();
     private readonly Dictionary<int, RtfFont> _fonts = [];
@@ -30,14 +34,22 @@ internal sealed class RtfParser
     private int? _colorBlue;
     private string? _pendingAnnotationId;
     private string? _pendingAnnotationAuthor;
+    private RtfAnnotationTime? _activeAnnotationTime;
+    private RtfAnnotationTime? _pendingAnnotationTime;
     private RtfAnnotationBuilder? _activeAnnotation;
 
     static RtfParser() => Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
-    public RtfParser(RtfImportOptions options) => _options = options;
+    public RtfParser(RtfImportOptions options, CancellationToken cancellationToken = default)
+    {
+        _options = options;
+        _cancellationToken = cancellationToken;
+        _loadBudget = new DocumentLoadBudgetState(options.Budget);
+    }
 
     public RtfImportResult Parse(ReadOnlySpan<byte> input)
     {
+        _cancellationToken.ThrowIfCancellationRequested();
         _options.Validate();
         if (input.Length > _options.MaxInputBytes)
             throw new RtfFormatException($"The input exceeds the {_options.MaxInputBytes}-byte limit", 0);
@@ -46,7 +58,7 @@ internal sealed class RtfParser
         _section = _document.Sections[0];
         _paragraph = new Paragraph();
 
-        var tokenizer = new RtfTokenizer(input);
+        var tokenizer = new RtfTokenizer(input, _cancellationToken);
         var savedStates = new RtfState[_options.MaxGroupDepth];
         var frames = new RtfGroupFrame[_options.MaxGroupDepth + 1];
         var state = RtfState.Default;
@@ -57,6 +69,7 @@ internal sealed class RtfParser
 
         while (tokenizer.TryRead(out RtfToken token))
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             if (rootClosed)
                 throw new RtfFormatException("Content follows the root RTF group", token.Offset);
 
@@ -252,6 +265,13 @@ internal sealed class RtfParser
                 if (atGroupStart)
                     BeginDestination(RtfDestination.AnnotationAuthor, token, ref state, frames, depth);
                 break;
+            case RtfKeyword.AnnotationTime:
+                if (atGroupStart)
+                {
+                    BeginDestination(RtfDestination.AnnotationTime, token, ref state, frames, depth);
+                    _activeAnnotationTime = new RtfAnnotationTime(token.Offset);
+                }
+                break;
             case RtfKeyword.Annotation:
                 if (atGroupStart)
                     BeginAnnotation(token, ref state, frames, depth);
@@ -270,6 +290,14 @@ internal sealed class RtfParser
                 break;
             case RtfKeyword.AnnotationCharacter:
                 break;
+            case RtfKeyword.Year:
+            case RtfKeyword.Month:
+            case RtfKeyword.Day:
+            case RtfKeyword.Hour:
+            case RtfKeyword.Minute:
+            case RtfKeyword.Second:
+                CaptureAnnotationTime(token, state);
+                break;
             case RtfKeyword.StyleSheet:
             case RtfKeyword.Info:
             case RtfKeyword.Generator:
@@ -280,6 +308,7 @@ internal sealed class RtfParser
                     state.Skip = true;
                 break;
             case RtfKeyword.Picture:
+            case RtfKeyword.AnnotationIcon:
             case RtfKeyword.Object:
             case RtfKeyword.Footnote:
             case RtfKeyword.Header:
@@ -579,6 +608,7 @@ internal sealed class RtfParser
                 if (!ConsumeFallback(ref state))
                 {
                     CommitParagraph(force: false, state);
+                    AddMarkupNode(token.Offset, "section");
                     _section = _document.Sections.Add();
                 }
                 break;
@@ -681,7 +711,9 @@ internal sealed class RtfParser
             return;
 
         _pendingCodePage = state.CodePage;
+        _cancellationToken.ThrowIfCancellationRequested();
         _encodedText.Write(bytes);
+        _cancellationToken.ThrowIfCancellationRequested();
     }
 
     private void AppendHexByte(byte value, ref RtfState state)
@@ -702,6 +734,7 @@ internal sealed class RtfParser
         if (_encodedText.WrittenCount == 0)
             return;
 
+        _cancellationToken.ThrowIfCancellationRequested();
         Encoding encoding;
         try
         {
@@ -721,6 +754,7 @@ internal sealed class RtfParser
         }
 
         string text = encoding.GetString(_encodedText.WrittenSpan);
+        _cancellationToken.ThrowIfCancellationRequested();
         _encodedText.Clear();
         if (!state.Skip)
             AppendText(text, state);
@@ -795,6 +829,21 @@ internal sealed class RtfParser
             throw new RtfFormatException($"Decoded text exceeds the {_options.MaxTextCharacters}-character limit", 0);
     }
 
+    private void AddMarkupNode(int byteOffset, string kind)
+    {
+        try
+        {
+            _loadBudget.AddMarkupNode();
+        }
+        catch (DocumentLoadLimitException exception)
+            when (exception.LimitName == nameof(DocumentLoadBudget.MaxMarkupNodes))
+        {
+            throw new RtfFormatException(
+                $"RTF {kind} count exceeds the {exception.Limit}-node {exception.LimitName} limit",
+                byteOffset);
+        }
+    }
+
     private void CommitParagraph(bool force, RtfState state)
     {
         if (state.Destination == RtfDestination.Annotation && _activeAnnotation is not null)
@@ -806,6 +855,7 @@ internal sealed class RtfParser
         if (!force && _paragraph.TextLength == 0)
             return;
 
+        AddMarkupNode(0, "paragraph");
         _paragraph.Format = state.ParagraphFormat;
         _section.Blocks.Add(_paragraph);
         _paragraph = new Paragraph();
@@ -854,9 +904,11 @@ internal sealed class RtfParser
             token.Offset,
             _pendingAnnotationId,
             _pendingAnnotationAuthor,
+            _pendingAnnotationTime,
             new RtfAnnotationPoint(frame.StartParagraph ?? _paragraph, frame.StartOffset));
         _pendingAnnotationId = null;
         _pendingAnnotationAuthor = null;
+        _pendingAnnotationTime = null;
     }
 
     private void CompleteDestination(RtfGroupFrame frame, RtfState state, int byteOffset)
@@ -879,9 +931,13 @@ internal sealed class RtfParser
             case RtfDestination.AnnotationAuthor:
                 _pendingAnnotationAuthor = EmptyToNull(value);
                 break;
+            case RtfDestination.AnnotationTime:
+                _pendingAnnotationTime = _activeAnnotationTime;
+                _activeAnnotationTime = null;
+                break;
             case RtfDestination.AnnotationDate:
                 if (_activeAnnotation is not null)
-                    _activeAnnotation.Date = DecodeDttm(value, byteOffset);
+                    _activeAnnotation.PackedDate = DecodeDttm(value, byteOffset);
                 break;
             case RtfDestination.AnnotationReference:
                 if (_activeAnnotation is not null)
@@ -917,6 +973,7 @@ internal sealed class RtfParser
             return;
         }
 
+        AddMarkupNode(byteOffset, $"annotation range {kind}");
         var point = new RtfAnnotationPoint(frame.StartParagraph ?? _paragraph, frame.StartOffset);
         if (!anchors.TryAdd(name, point))
         {
@@ -935,9 +992,119 @@ internal sealed class RtfParser
 
         CommitAnnotationParagraph(force: false, state);
         if (_activeAnnotation.Blocks.Count == 0)
+        {
+            AddMarkupNode(_activeAnnotation.ByteOffset, "annotation paragraph");
             _activeAnnotation.Blocks.Add(new Paragraph());
+        }
+        _activeAnnotation.Date = ResolveAnnotationDate(_activeAnnotation);
+        AddMarkupNode(_activeAnnotation.ByteOffset, "annotation record");
         _annotations.Add(_activeAnnotation.Build());
         _activeAnnotation = null;
+    }
+
+    private void CaptureAnnotationTime(RtfToken token, RtfState state)
+    {
+        if (state.Destination != RtfDestination.AnnotationTime ||
+            _activeAnnotationTime is null ||
+            !token.HasParameter)
+        {
+            return;
+        }
+
+        switch (token.Keyword)
+        {
+            case RtfKeyword.Year:
+                _activeAnnotationTime.Year = token.Parameter;
+                break;
+            case RtfKeyword.Month:
+                _activeAnnotationTime.Month = token.Parameter;
+                break;
+            case RtfKeyword.Day:
+                _activeAnnotationTime.Day = token.Parameter;
+                break;
+            case RtfKeyword.Hour:
+                _activeAnnotationTime.Hour = token.Parameter;
+                break;
+            case RtfKeyword.Minute:
+                _activeAnnotationTime.Minute = token.Parameter;
+                break;
+            case RtfKeyword.Second:
+                _activeAnnotationTime.Second = token.Parameter;
+                break;
+        }
+    }
+
+    private DateTimeOffset? ResolveAnnotationDate(RtfAnnotationBuilder annotation)
+    {
+        DateTimeOffset? packed = annotation.PackedDate;
+        RtfAnnotationTime? time = annotation.AnnotationTime;
+        if (time is null)
+            return packed;
+
+        if (!time.HasAnyValue)
+        {
+            _diagnostics.Add(
+                RtfImportWarningKind.MalformedAnnotation,
+                "An annotation atntime destination contains no date or time fields and was ignored.",
+                "annotation-time",
+                time.ByteOffset);
+            return packed;
+        }
+
+        int? year = time.Year ?? packed?.Year;
+        int? month = time.Month ?? packed?.Month;
+        int? day = time.Day ?? packed?.Day;
+        if (year is null || month is null || day is null)
+        {
+            _diagnostics.Add(
+                RtfImportWarningKind.MalformedAnnotation,
+                "An annotation atntime destination has no complete date and no valid atndate baseline; it was ignored.",
+                "annotation-time",
+                time.ByteOffset);
+            return packed;
+        }
+
+        int hour = time.Hour ?? packed?.Hour ?? 0;
+        int minute = time.Minute ?? packed?.Minute ?? 0;
+        int second = time.Second ?? 0;
+        try
+        {
+            _ = new DateTimeOffset(year.Value, month.Value, day.Value, hour, minute, second, TimeSpan.Zero);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            _diagnostics.Add(
+                RtfImportWarningKind.MalformedAnnotation,
+                "An annotation atntime destination contains invalid calendar fields and was ignored.",
+                "annotation-time",
+                time.ByteOffset);
+            return packed;
+        }
+
+        if (packed is DateTimeOffset baseline)
+        {
+            if (time.ConflictsWith(baseline))
+            {
+                _diagnostics.Add(
+                    RtfImportWarningKind.MalformedAnnotation,
+                    "Annotation atntime and atndate fields disagree; the packed atndate fields took precedence.",
+                    "annotation-time",
+                    time.ByteOffset);
+            }
+
+            // atndate is the value Word itself exposes and is authoritative for the fields its
+            // packed DTTM carries. atntime can still supply seconds, which DTTM has no slot for.
+            return new DateTimeOffset(
+                baseline.Year,
+                baseline.Month,
+                baseline.Day,
+                baseline.Hour,
+                baseline.Minute,
+                second,
+                TimeSpan.Zero);
+        }
+
+        return new DateTimeOffset(year.Value, month.Value, day.Value, hour, minute, second, TimeSpan.Zero);
     }
 
     private void CommitAnnotationParagraph(bool force, RtfState state)
@@ -945,6 +1112,7 @@ internal sealed class RtfParser
         if (_activeAnnotation is null || (!force && _activeAnnotation.Paragraph.TextLength == 0))
             return;
 
+        AddMarkupNode(_activeAnnotation.ByteOffset, "annotation paragraph");
         _activeAnnotation.Paragraph.Format = state.ParagraphFormat;
         _activeAnnotation.Blocks.Add(_activeAnnotation.Paragraph);
         _activeAnnotation.Paragraph = new Paragraph();
@@ -989,18 +1157,17 @@ internal sealed class RtfParser
 
     private void ImportAnnotations()
     {
+        _cancellationToken.ThrowIfCancellationRequested();
         if (_annotations.Count == 0)
         {
             ReportOrphanAnchors(new HashSet<string>(StringComparer.Ordinal));
             return;
         }
 
-        bool currentParagraphIsReferenced = _annotations.Any(annotation =>
-                ReferenceEquals(annotation.Fallback.Paragraph, _paragraph)) ||
-            _annotationStarts.Values.Any(point => ReferenceEquals(point.Paragraph, _paragraph)) ||
-            _annotationEnds.Values.Any(point => ReferenceEquals(point.Paragraph, _paragraph));
+        bool currentParagraphIsReferenced = IsCurrentParagraphReferenced();
         if (currentParagraphIsReferenced && _paragraph.Parent is null)
         {
+            AddMarkupNode(0, "paragraph");
             _section.Blocks.Add(_paragraph);
             _paragraph = new Paragraph();
         }
@@ -1010,13 +1177,17 @@ internal sealed class RtfParser
         foreach (Section section in _document.Sections)
         {
             foreach (Paragraph paragraph in section.Blocks.Paragraphs)
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
                 paragraphOrder.TryAdd(paragraph, paragraphIndex++);
+            }
         }
 
         var usedAnchors = new HashSet<string>(StringComparer.Ordinal);
         var resolved = new List<RtfResolvedAnnotation>(_annotations.Count);
         foreach (RtfImportedAnnotation annotation in _annotations)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             RtfAnnotationPoint start = annotation.Fallback;
             RtfAnnotationPoint end = annotation.Fallback;
             if (annotation.Reference is string reference)
@@ -1068,7 +1239,6 @@ internal sealed class RtfParser
                     "An annotation range runs backwards or outside the body and was imported as a point comment.",
                     "annotation-anchor",
                     annotation.ByteOffset);
-                startIndex = endIndex = paragraphOrder.GetValueOrDefault(annotation.Fallback.Paragraph);
             }
 
             resolved.Add(new RtfResolvedAnnotation(annotation, start, end));
@@ -1076,66 +1246,135 @@ internal sealed class RtfParser
 
         ReportOrphanAnchors(usedAnchors);
 
-        var insertedReferences = new Dictionary<Paragraph, List<int>>(ReferenceEqualityComparer.Instance);
-        foreach (RtfResolvedAnnotation item in resolved.OrderBy(static annotation => annotation.Source.Sequence))
+        RtfResolvedAnnotation[] sequence = [.. resolved];
+        Dictionary<Paragraph, AnnotationOffsetIndex> offsetIndices = BuildAnnotationOffsetIndices(sequence);
+        var anchorBatches = new Dictionary<Paragraph, ParagraphAnnotationBatch>(ReferenceEqualityComparer.Instance);
+        RunFormat referenceFormat = RunFormat.Default with { StyleId = "CommentReference" };
+        int nextCommentId = 1;
+        foreach (RtfResolvedAnnotation item in sequence)
         {
-            int startOffset = MapAnnotationOffset(item.Start, insertedReferences);
-            int endOffset = MapAnnotationOffset(item.End, insertedReferences);
-            Comment comment = _document.AddComment(
-                item.Start.Paragraph,
-                startOffset,
-                item.End.Paragraph,
-                endOffset,
-                string.Empty,
+            _cancellationToken.ThrowIfCancellationRequested();
+            int startOffset = MapAnnotationStart(item.Start, offsetIndices);
+            int endOffset = offsetIndices[item.End.Paragraph].MapNextReference(item.End.Offset);
+            AddMarkupNode(item.Source.ByteOffset, "comment");
+            Comment comment = _document.AddImportedComment(
+                nextCommentId++,
                 item.Source.Author,
                 item.Source.AnnotationId);
             comment.Date = item.Source.Date;
             comment.DateUtc = null;
-            comment.Blocks.Clear();
             comment.Blocks.AddRange(item.Source.Blocks);
             item.Comment = comment;
 
-            if (!insertedReferences.TryGetValue(item.End.Paragraph, out List<int>? positions))
-            {
-                positions = [];
-                insertedReferences.Add(item.End.Paragraph, positions);
-            }
-            positions.Add(item.End.Offset);
+            int markOrder = checked(item.Source.Sequence * 2);
+            GetAnnotationBatch(anchorBatches, item.Start.Paragraph).Marks.Add(
+                new ImportedMarkPlacement(
+                    startOffset,
+                    markOrder,
+                    new CommentRangeStart { Id = comment.Id }));
+            ParagraphAnnotationBatch endBatch = GetAnnotationBatch(anchorBatches, item.End.Paragraph);
+            endBatch.Objects.Add(new ImportedObjectInsertion(
+                item.End.Offset,
+                item.Source.Sequence,
+                new CommentReference { Id = comment.Id },
+                referenceFormat,
+                UseAppendRunSemantics: item.End.Offset == item.End.Paragraph.TextLength));
+            endBatch.Marks.Add(new ImportedMarkPlacement(
+                endOffset,
+                markOrder + 1,
+                new CommentRangeEnd { Id = comment.Id }));
         }
 
-        RtfResolvedAnnotation[] sequence = [.. resolved.OrderBy(static annotation => annotation.Source.Sequence)];
-        for (int index = 0; index < sequence.Length; index++)
+        foreach (ParagraphAnnotationBatch batch in anchorBatches.Values)
         {
-            RtfResolvedAnnotation item = sequence[index];
-            if (item.Source.ParentReference is not string parentReference)
-                continue;
+            _cancellationToken.ThrowIfCancellationRequested();
+            batch.Paragraph.InsertImportedAnchors(batch.Objects, batch.Marks, _cancellationToken);
+        }
 
-            RtfResolvedAnnotation? parent = parentReference == "-1"
-                ? sequence.Take(index).LastOrDefault(candidate =>
-                    candidate.Comment?.ParentId is null && SameAnchor(candidate, item))
-                : sequence.FirstOrDefault(candidate =>
-                    !ReferenceEquals(candidate, item) &&
-                    (candidate.Source.Reference == parentReference ||
-                     candidate.Source.AnnotationId == parentReference));
+        ResolveAnnotationParents(sequence);
+    }
 
-            if (parent?.Comment is Comment parentComment && item.Comment is Comment comment)
+    private void ResolveAnnotationParents(IReadOnlyList<RtfResolvedAnnotation> sequence)
+    {
+        var annotationIds = new Dictionary<string, PriorParentEntry>(StringComparer.Ordinal);
+        var annotationReferences = new Dictionary<string, PriorParentEntry>(StringComparer.Ordinal);
+        var rootsByAnchor = new Dictionary<RtfAnnotationAnchorKey, RtfResolvedAnnotation>();
+
+        foreach (RtfResolvedAnnotation item in sequence)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (item.Source.ParentReference is string parentReference)
             {
-                comment.ParentId = parentComment.Id;
-                continue;
+                bool ambiguous = false;
+                RtfResolvedAnnotation? parent = parentReference == "-1"
+                    ? rootsByAnchor.GetValueOrDefault(RtfAnnotationAnchorKey.Create(item))
+                    : ResolvePriorParent(annotationIds, annotationReferences, parentReference, out ambiguous);
+
+                if (parent?.Comment is Comment parentComment && item.Comment is Comment comment)
+                {
+                    comment.ParentId = parentComment.Id;
+                }
+                else
+                {
+                    _diagnostics.Add(
+                        RtfImportWarningKind.MalformedAnnotation,
+                        ambiguous
+                            ? $"Annotation parent '{parentReference}' is ambiguous among preceding annotations; the comment was kept at top level."
+                            : $"Annotation parent '{parentReference}' does not name a preceding annotation; the comment was kept at top level.",
+                        "annotation-parent",
+                        item.Source.ByteOffset);
+                }
             }
 
-            _diagnostics.Add(
-                RtfImportWarningKind.MalformedAnnotation,
-                $"Annotation parent '{parentReference}' could not be resolved; the comment was kept at top level.",
-                "annotation-parent",
-                item.Source.ByteOffset);
+            AddPriorParent(annotationIds, item.Source.AnnotationId, item);
+            AddPriorParent(annotationReferences, item.Source.Reference, item);
+            if (item.Comment?.ParentId is null)
+                rootsByAnchor[RtfAnnotationAnchorKey.Create(item)] = item;
         }
+    }
+
+    private static RtfResolvedAnnotation? ResolvePriorParent(
+        IReadOnlyDictionary<string, PriorParentEntry> annotationIds,
+        IReadOnlyDictionary<string, PriorParentEntry> annotationReferences,
+        string parentReference,
+        out bool ambiguous)
+    {
+        if (annotationIds.TryGetValue(parentReference, out PriorParentEntry? byAnnotationId))
+        {
+            ambiguous = byAnnotationId.Ambiguous;
+            return byAnnotationId.Candidate;
+        }
+
+        // Only non-conforming writers use atnref here. It remains a fail-soft fallback after
+        // the grammar's annotid form has been exhausted.
+        if (annotationReferences.TryGetValue(parentReference, out PriorParentEntry? byReference))
+        {
+            ambiguous = byReference.Ambiguous;
+            return byReference.Candidate;
+        }
+
+        ambiguous = false;
+        return null;
+    }
+
+    private static void AddPriorParent(
+        Dictionary<string, PriorParentEntry> index,
+        string? value,
+        RtfResolvedAnnotation candidate)
+    {
+        if (value is null)
+            return;
+
+        if (!index.TryGetValue(value, out PriorParentEntry? entry))
+            index.Add(value, new PriorParentEntry(candidate));
+        else
+            entry.AddDuplicate();
     }
 
     private void ReportOrphanAnchors(IReadOnlySet<string> usedAnchors)
     {
-        if (_annotationStarts.Keys.Any(id => !usedAnchors.Contains(id)) ||
-            _annotationEnds.Keys.Any(id => !usedAnchors.Contains(id)))
+        if (HasOrphanAnchor(_annotationStarts.Keys, usedAnchors) ||
+            HasOrphanAnchor(_annotationEnds.Keys, usedAnchors))
         {
             _diagnostics.Add(
                 RtfImportWarningKind.MalformedAnnotation,
@@ -1145,26 +1384,91 @@ internal sealed class RtfParser
         }
     }
 
-    private static bool SameAnchor(RtfResolvedAnnotation left, RtfResolvedAnnotation right) =>
-        ReferenceEquals(left.Start.Paragraph, right.Start.Paragraph) &&
-        left.Start.Offset == right.Start.Offset &&
-        ReferenceEquals(left.End.Paragraph, right.End.Paragraph) &&
-        left.End.Offset == right.End.Offset;
-
-    private static int MapAnnotationOffset(
-        RtfAnnotationPoint point,
-        Dictionary<Paragraph, List<int>> insertedReferences)
+    private bool IsCurrentParagraphReferenced()
     {
-        if (!insertedReferences.TryGetValue(point.Paragraph, out List<int>? positions))
+        foreach (RtfImportedAnnotation annotation in _annotations)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (ReferenceEquals(annotation.Fallback.Paragraph, _paragraph))
+                return true;
+        }
+
+        foreach (RtfAnnotationPoint point in _annotationStarts.Values)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (ReferenceEquals(point.Paragraph, _paragraph))
+                return true;
+        }
+
+        foreach (RtfAnnotationPoint point in _annotationEnds.Values)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (ReferenceEquals(point.Paragraph, _paragraph))
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool HasOrphanAnchor(IEnumerable<string> anchors, IReadOnlySet<string> usedAnchors)
+    {
+        foreach (string anchor in anchors)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (!usedAnchors.Contains(anchor))
+                return true;
+        }
+
+        return false;
+    }
+
+    private Dictionary<Paragraph, AnnotationOffsetIndex> BuildAnnotationOffsetIndices(
+        IReadOnlyList<RtfResolvedAnnotation> annotations)
+    {
+        var positions = new Dictionary<Paragraph, List<int>>(ReferenceEqualityComparer.Instance);
+        foreach (RtfResolvedAnnotation annotation in annotations)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            if (!positions.TryGetValue(annotation.End.Paragraph, out List<int>? paragraphPositions))
+            {
+                paragraphPositions = [];
+                positions.Add(annotation.End.Paragraph, paragraphPositions);
+            }
+
+            paragraphPositions.Add(annotation.End.Offset);
+        }
+
+        var result = new Dictionary<Paragraph, AnnotationOffsetIndex>(ReferenceEqualityComparer.Instance);
+        foreach ((Paragraph paragraph, List<int> paragraphPositions) in positions)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+            result.Add(paragraph, new AnnotationOffsetIndex(paragraphPositions));
+        }
+
+        return result;
+    }
+
+    private static int MapAnnotationStart(
+        RtfAnnotationPoint point,
+        IReadOnlyDictionary<Paragraph, AnnotationOffsetIndex> offsetIndices)
+    {
+        if (!offsetIndices.TryGetValue(point.Paragraph, out AnnotationOffsetIndex? index))
             return point.Offset;
 
-        int shifted = point.Offset;
-        foreach (int position in positions)
+        return index.MapStart(point.Offset);
+    }
+
+    private static ParagraphAnnotationBatch GetAnnotationBatch(
+        Dictionary<Paragraph, ParagraphAnnotationBatch> batches,
+        Paragraph paragraph)
+    {
+        if (!batches.TryGetValue(paragraph, out ParagraphAnnotationBatch? batch))
         {
-            if (position < point.Offset)
-                shifted++;
+            batch = new ParagraphAnnotationBatch(paragraph);
+            batches.Add(paragraph, batch);
         }
-        return shifted;
+
+        return batch;
     }
 
     private static bool IsCapturedDestination(RtfDestination destination) =>
@@ -1172,6 +1476,7 @@ internal sealed class RtfParser
             RtfDestination.AnnotationRangeEnd or
             RtfDestination.AnnotationId or
             RtfDestination.AnnotationAuthor or
+            RtfDestination.AnnotationTime or
             RtfDestination.AnnotationDate or
             RtfDestination.AnnotationReference or
             RtfDestination.AnnotationParent;
@@ -1440,6 +1745,7 @@ internal sealed class RtfParser
         AnnotationRangeEnd,
         AnnotationId,
         AnnotationAuthor,
+        AnnotationTime,
         AnnotationDate,
         AnnotationReference,
         AnnotationParent,
@@ -1458,6 +1764,134 @@ internal sealed class RtfParser
 
     private readonly record struct RtfAnnotationPoint(Paragraph Paragraph, int Offset);
 
+    private readonly struct RtfAnnotationAnchorKey : IEquatable<RtfAnnotationAnchorKey>
+    {
+        private RtfAnnotationAnchorKey(
+            Paragraph startParagraph,
+            int startOffset,
+            Paragraph endParagraph,
+            int endOffset)
+        {
+            StartParagraph = startParagraph;
+            StartOffset = startOffset;
+            EndParagraph = endParagraph;
+            EndOffset = endOffset;
+        }
+
+        private Paragraph StartParagraph { get; }
+
+        private int StartOffset { get; }
+
+        private Paragraph EndParagraph { get; }
+
+        private int EndOffset { get; }
+
+        public static RtfAnnotationAnchorKey Create(RtfResolvedAnnotation annotation) => new(
+            annotation.Start.Paragraph,
+            annotation.Start.Offset,
+            annotation.End.Paragraph,
+            annotation.End.Offset);
+
+        public bool Equals(RtfAnnotationAnchorKey other) =>
+            ReferenceEquals(StartParagraph, other.StartParagraph) &&
+            StartOffset == other.StartOffset &&
+            ReferenceEquals(EndParagraph, other.EndParagraph) &&
+            EndOffset == other.EndOffset;
+
+        public override bool Equals(object? obj) => obj is RtfAnnotationAnchorKey other && Equals(other);
+
+        public override int GetHashCode() => HashCode.Combine(
+            RuntimeHelpers.GetHashCode(StartParagraph),
+            StartOffset,
+            RuntimeHelpers.GetHashCode(EndParagraph),
+            EndOffset);
+    }
+
+    private sealed class PriorParentEntry(RtfResolvedAnnotation candidate)
+    {
+        public RtfResolvedAnnotation? Candidate { get; private set; } = candidate;
+
+        public bool Ambiguous { get; private set; }
+
+        public void AddDuplicate()
+        {
+            Candidate = null;
+            Ambiguous = true;
+        }
+    }
+
+    private sealed class AnnotationOffsetIndex
+    {
+        private readonly int[] _positions;
+        private readonly Dictionary<int, int> _nextOrdinals = [];
+
+        public AnnotationOffsetIndex(List<int> positions)
+        {
+            positions.Sort();
+            _positions = [.. positions];
+        }
+
+        public int MapStart(int position) => checked(position + LowerBound(position));
+
+        public int MapNextReference(int position)
+        {
+            int first = LowerBound(position);
+            if (first >= _positions.Length || _positions[first] != position)
+                throw new InvalidOperationException("An annotation endpoint was not indexed.");
+
+            int ordinal = _nextOrdinals.GetValueOrDefault(position);
+            _nextOrdinals[position] = checked(ordinal + 1);
+            return checked(position + first + ordinal);
+        }
+
+        private int LowerBound(int value)
+        {
+            int low = 0;
+            int high = _positions.Length;
+            while (low < high)
+            {
+                int middle = low + ((high - low) >> 1);
+                if (_positions[middle] < value)
+                    low = middle + 1;
+                else
+                    high = middle;
+            }
+
+            return low;
+        }
+    }
+
+    private sealed class ParagraphAnnotationBatch(Paragraph paragraph)
+    {
+        public Paragraph Paragraph { get; } = paragraph;
+
+        public List<ImportedObjectInsertion> Objects { get; } = [];
+
+        public List<ImportedMarkPlacement> Marks { get; } = [];
+    }
+
+    private sealed class RtfAnnotationTime(int byteOffset)
+    {
+        public int ByteOffset { get; } = byteOffset;
+        public int? Year { get; set; }
+        public int? Month { get; set; }
+        public int? Day { get; set; }
+        public int? Hour { get; set; }
+        public int? Minute { get; set; }
+        public int? Second { get; set; }
+
+        public bool HasAnyValue =>
+            Year is not null || Month is not null || Day is not null ||
+            Hour is not null || Minute is not null || Second is not null;
+
+        public bool ConflictsWith(DateTimeOffset value) =>
+            Year is int year && year != value.Year ||
+            Month is int month && month != value.Month ||
+            Day is int day && day != value.Day ||
+            Hour is int hour && hour != value.Hour ||
+            Minute is int minute && minute != value.Minute;
+    }
+
     private sealed class RtfAnnotationBuilder
     {
         public RtfAnnotationBuilder(
@@ -1465,12 +1899,14 @@ internal sealed class RtfParser
             int byteOffset,
             string? annotationId,
             string? author,
+            RtfAnnotationTime? annotationTime,
             RtfAnnotationPoint fallback)
         {
             Sequence = sequence;
             ByteOffset = byteOffset;
             AnnotationId = annotationId;
             Author = author;
+            AnnotationTime = annotationTime;
             Fallback = fallback;
         }
 
@@ -1478,9 +1914,11 @@ internal sealed class RtfParser
         public int ByteOffset { get; }
         public string? AnnotationId { get; }
         public string? Author { get; }
+        public RtfAnnotationTime? AnnotationTime { get; }
         public RtfAnnotationPoint Fallback { get; }
         public string? Reference { get; set; }
         public string? ParentReference { get; set; }
+        public DateTimeOffset? PackedDate { get; set; }
         public DateTimeOffset? Date { get; set; }
         public List<Block> Blocks { get; } = [];
         public Paragraph Paragraph { get; set; } = new();

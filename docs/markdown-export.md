@@ -148,7 +148,9 @@ EMF and WMF are returned unchanged with `MediaMayNotRender`, never silently tran
 
 Footnotes and endnotes are collected lazily in first-reference order and repeated references share
 one definition. GitHub mode uses `[^fn-id]` and `[^en-id]`; CommonMark mode generates an encoded HTML
-notes section. Missing note bodies leave a visible `?` marker and a diagnostic.
+notes section. The GitHub form imports back into real `Note`/`NoteReference` objects, including
+repeated references and multi-paragraph bodies. Missing note bodies leave a visible `?` marker and
+a diagnostic.
 
 ## Options
 
@@ -206,7 +208,9 @@ database, zip, HTTP response, or another naming scheme without first writing tem
 - OMML equations are represented by linear extracted text, not converted to LaTeX or MathML.
 - Text boxes are flattened at their anchor; shape geometry, floating position and wrapping are not
   representable.
-- Markdown import and Markdown-to-Word round-trips are outside this exporter.
+- The documented semantic subset, including GitHub-mode notes, is covered by export/import
+  round-trips. Generated CommonMark HTML fallbacks are kept as diagnosed text by the Markdown
+  importer; use the HTML importer when HTML semantics are required.
 
 ## Tests and specifications
 

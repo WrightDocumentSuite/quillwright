@@ -28,8 +28,8 @@ overloads leave the stream open.
   page-break-before, widow control, hyphenation, direction, contextual spacing, outline level
   and tab stops with leaders
 - RTF 1.9.1 annotations: `atrfstart`/`atrfend` range bookmarks, `atnid` initials,
-  `atnauthor`, `chatn`, `annotation`, `atnref`, minute-precision `atndate`, comment body
-  paragraphs and Word-compatible flat replies through `atnparent -1`
+  `atnauthor`, second-precision `atntime`, Word-compatible packed `atndate`, `chatn`,
+  `annotation`, `atnref`, comment body paragraphs and flat replies through `atnparent -1`
 
 Each run is isolated in its own RTF group and starts with `\plain`, so formatting cannot leak
 between adjacent runs. The writer emits `\pard` for every paragraph for the same reason.
@@ -44,15 +44,25 @@ preserving arbitrary WordprocessingML or an existing RTF file byte for byte.
 - Unsupported inline objects are omitted, or replaced by their text when they expose one.
 - Field instructions and deleted runs are not written as visible text; inline wrappers and
   marks are unwrapped.
-- A nested reply-to-reply chain is flattened to the RTF/Word flat reply list and reported as
-  `ContentSkipped` with subject `comment-thread-depth`. A reply that is not adjacent to its
-  thread root uses an explicit `atnparent` reference and reports `comment-thread-order`, because
-  some Word versions flatten that form.
+- In a contiguous thread, Word's `atnparent -1` convention flattens a nested reply-to-reply
+  chain to the thread root and reports `comment-thread-depth`. A non-adjacent reply instead
+  uses its immediate parent's RTF annotation id in `atnparent` (not the numeric range `atnref`),
+  which preserves the exact parent for a conforming reader; it reports `comment-thread-order`
+  because Word versions may flatten that form.
+- An explicit parent needs a non-empty annotation id that no other possible parent shares. If
+  the parent's initials are absent or ambiguous, the writer does not invent an id or risk
+  attaching the reply to the wrong message: it omits `atnparent`, exports the reply at top level
+  and reports `comment-parent-annotation-id` as well as `comment-thread-order`.
+- OOXML `intelligentPlaceholder` has no RTF 1.9.1 field. Its prompt is service text rather
+  than a user-authored remark, so a top-level follow-up retains an empty anchored annotation
+  instead of exposing that prompt as comment text. The lost role is reported as
+  `comment-follow-up`.
 - OOXML resolved state and reactions have no RTF 1.9.1 field. They are omitted with precise
   `comment-resolved-state` and `comment-reactions` diagnostics; comment text, range, author,
   initials, date and the supported reply relationship are still written.
-- RTF DTTM stores wall-clock fields only to the minute. Seconds and timezone identity from a
-  `DateTimeOffset` cannot survive the conversion.
+- `atntime` retains wall-clock fields to the second, while the parallel packed `atndate` keeps
+  Word compatibility at minute precision. Neither form has a timezone or subsecond field, so
+  offset identity and fractional seconds from a `DateTimeOffset` cannot survive the conversion.
 - Named styles, lists, section page geometry, borders, shading, theme-only values and the long
   tail of Word-specific formatting are not authored yet.
 - Four distinct OOXML font slots collapse to one RTF font when they disagree. A theme colour

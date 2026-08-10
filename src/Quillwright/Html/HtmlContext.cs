@@ -203,9 +203,22 @@ internal sealed class HtmlContext : IInlineExportContext
 /// <summary>A referenced footnote or endnote waiting for its definition at the foot of the page.</summary>
 internal sealed class HtmlNoteEntry
 {
+    private readonly List<string> _referenceLabels = [];
+
     public required int Number { get; init; }
 
     public required string Label { get; init; }
 
     public required Note Body { get; init; }
+
+    public IReadOnlyList<string> ReferenceLabels => _referenceLabels;
+
+    public string AddReference()
+    {
+        string label = _referenceLabels.Count == 0
+            ? Label + "-ref"
+            : $"{Label}-ref-{_referenceLabels.Count + 1}";
+        _referenceLabels.Add(label);
+        return label;
+    }
 }

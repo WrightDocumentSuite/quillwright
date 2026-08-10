@@ -463,6 +463,26 @@ public sealed partial class WordDocument
     }
 
     /// <summary>
+    /// Creates a comment for a format reader that will materialize all imported anchors in one batch.
+    /// </summary>
+    internal Comment AddImportedComment(
+        int id,
+        string? author,
+        string? initials)
+    {
+        var comment = new Comment(this)
+        {
+            Id = id,
+            Author = author,
+            Initials = initials,
+        };
+        Styles.GetOrAdd("CommentText");
+        Styles.GetOrAdd("CommentReference", StyleKind.Character);
+        _comments.Add(comment);
+        return comment;
+    }
+
+    /// <summary>
     /// Adds a reply to a comment, over the same stretch of text the comment it answers covers.
     /// </summary>
     /// <param name="parent">The comment being replied to.</param>

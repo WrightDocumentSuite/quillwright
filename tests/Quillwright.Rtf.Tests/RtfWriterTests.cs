@@ -14,7 +14,7 @@ public class RtfWriterTests
         Paragraph paragraph = document.Sections[0].AddParagraph("Reviewed text.");
         Comment comment = document.AddComment(paragraph, 0, 8, "First review note.", "Ada Lovelace", "AL");
         comment.AddParagraph("Second comment paragraph.");
-        comment.Date = new DateTimeOffset(2024, 5, 6, 14, 37, 0, TimeSpan.Zero);
+        comment.Date = new DateTimeOffset(2024, 5, 6, 14, 37, 29, TimeSpan.Zero);
         Comment reply = document.AddReply(comment, "A reply.", "Grace Hopper", "GH");
         reply.Date = new DateTimeOffset(2024, 5, 6, 15, 2, 0, TimeSpan.Zero);
 
@@ -27,6 +27,7 @@ public class RtfWriterTests
         Assert.Contains(@"\atrfend 1", exported.ToString(), StringComparison.Ordinal);
         Assert.Contains(@"\atnid AL", exported.ToString(), StringComparison.Ordinal);
         Assert.Contains(@"\atnauthor Ada Lovelace", exported.ToString(), StringComparison.Ordinal);
+        Assert.Contains(@"\atntime\yr2024\mo5\dy6\hr14\min37\sec29", exported.ToString(), StringComparison.Ordinal);
         Assert.Contains(@"\atndate ", exported.ToString(), StringComparison.Ordinal);
         Assert.Contains(@"\atnparent -1", exported.ToString(), StringComparison.Ordinal);
 
@@ -39,7 +40,7 @@ public class RtfWriterTests
         Assert.Equal(2, first.Blocks.Paragraphs.Count());
         Assert.Equal("Ada Lovelace", first.Author);
         Assert.Equal("AL", first.Initials);
-        Assert.Equal(new DateTimeOffset(2024, 5, 6, 14, 37, 0, TimeSpan.Zero), first.Date);
+        Assert.Equal(new DateTimeOffset(2024, 5, 6, 14, 37, 29, TimeSpan.Zero), first.Date);
         Assert.Equal("A reply.", second.GetText());
         Assert.Equal("Grace Hopper", second.Author);
         Assert.Equal("GH", second.Initials);
@@ -72,6 +73,110 @@ public class RtfWriterTests
         Assert.Contains(result.Diagnostics, static warning => warning.Subject == "comment-resolved-state");
         Assert.Contains(result.Diagnostics, static warning => warning.Subject == "comment-reactions");
         Assert.DoesNotContain(result.Diagnostics, static warning => warning.Subject == "comments");
+    }
+
+    [Fact]
+    public void NonAdjacentReply_UsesTheParentAnnotationIdAndRoundTrips()
+    {
+        WordDocument document = WordDocument.Create();
+        Paragraph paragraph = document.Sections[0].AddParagraph("Reviewed text.");
+        Comment root = document.AddComment(paragraph, 0, 8, "First thread.", "Ada", "AL");
+        document.AddComment(paragraph, 0, 8, "Interleaved thread.", "Linus", "LT");
+        document.AddReply(root, "Delayed reply.", "Grace", "GH");
+
+        RtfExportResult exported = RtfWriter.Save(document);
+        RtfImportResult imported = RtfReader.Load(exported.Content.Span);
+
+        Assert.Contains(@"\atnparent AL", exported.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(@"\atnparent 1", exported.ToString(), StringComparison.Ordinal);
+        Assert.Contains(exported.Diagnostics, static warning => warning.Subject == "comment-thread-order");
+        Assert.True(imported.Diagnostics.IsEmpty, imported.Diagnostics.ToString());
+
+        Comment importedRoot = imported.Document.Comments.Single(static comment => comment.GetText() == "First thread.");
+        Comment importedReply = imported.Document.Comments.Single(static comment => comment.GetText() == "Delayed reply.");
+        Assert.Equal(importedRoot.Id, importedReply.ParentId);
+    }
+
+    [Fact]
+    public void NonAdjacentNestedReply_UsesItsImmediateParentAnnotationId()
+    {
+        WordDocument document = WordDocument.Create();
+        Paragraph paragraph = document.Sections[0].AddParagraph("Reviewed text.");
+        Comment root = document.AddComment(paragraph, 0, 8, "Root.", "Ada", "AR");
+        Comment parentReply = document.AddReply(root, "First reply.", "Grace", "PR");
+        document.AddComment(paragraph, 0, 8, "Interleaved thread.", "Linus", "IR");
+        document.AddReply(parentReply, "Nested reply.", "Margaret", "NR");
+
+        RtfExportResult exported = RtfWriter.Save(document);
+        RtfImportResult imported = RtfReader.Load(exported.Content.Span);
+
+        Assert.Contains(@"\atnparent PR", exported.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(exported.Diagnostics, static warning => warning.Subject == "comment-thread-depth");
+        Comment importedParent = imported.Document.Comments.Single(static comment => comment.GetText() == "First reply.");
+        Comment importedNested = imported.Document.Comments.Single(static comment => comment.GetText() == "Nested reply.");
+        Assert.Equal(importedParent.Id, importedNested.ParentId);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void NonAdjacentReplyWithoutParentAnnotationId_IsFlattenedAndReported(string? parentInitials)
+    {
+        WordDocument document = WordDocument.Create();
+        Paragraph paragraph = document.Sections[0].AddParagraph("Reviewed text.");
+        Comment root = document.AddComment(paragraph, 0, 8, "Root.", "Ada", parentInitials);
+        document.AddComment(paragraph, 0, 8, "Interleaved thread.", "Linus", "IR");
+        document.AddReply(root, "Reply.", "Grace", "RR");
+
+        RtfExportResult exported = RtfWriter.Save(document);
+        RtfImportResult imported = RtfReader.Load(exported.Content.Span);
+
+        Assert.DoesNotContain(@"\atnparent ", exported.ToString(), StringComparison.Ordinal);
+        Assert.Contains(exported.Diagnostics, static warning => warning.Subject == "comment-parent-annotation-id");
+        Assert.Null(imported.Document.Comments.Single(static comment => comment.GetText() == "Reply.").ParentId);
+    }
+
+    [Fact]
+    public void NonAdjacentReplyWithAmbiguousParentAnnotationId_IsFlattenedAndReported()
+    {
+        WordDocument document = WordDocument.Create();
+        Paragraph paragraph = document.Sections[0].AddParagraph("Reviewed text.");
+        Comment root = document.AddComment(paragraph, 0, 8, "Root.", "Ada", "AA");
+        document.AddComment(paragraph, 0, 8, "Same author id.", "Another Ada", "AA");
+        document.AddReply(root, "Reply.", "Grace", "RR");
+
+        RtfExportResult exported = RtfWriter.Save(document);
+        RtfImportResult imported = RtfReader.Load(exported.Content.Span);
+
+        Assert.DoesNotContain(@"\atnparent AA", exported.ToString(), StringComparison.Ordinal);
+        Assert.Contains(exported.Diagnostics, static warning => warning.Subject == "comment-parent-annotation-id");
+        Assert.Null(imported.Document.Comments.Single(static comment => comment.GetText() == "Reply.").ParentId);
+    }
+
+    [Fact]
+    public void FollowUpPromptBody_IsOmittedAndReported()
+    {
+        const string prompt = "Ask the user to add quarterly figures.";
+        WordDocument document = WordDocument.Create();
+        Paragraph paragraph = document.Sections[0].AddParagraph("Reviewed text.");
+        Comment followUp = document.AddComment(paragraph, 0, 8, prompt, "Ada", "AL");
+        followUp.IsFollowUp = true;
+
+        RtfExportResult exported = RtfWriter.Save(document);
+        RtfImportResult imported = RtfReader.Load(exported.Content.Span);
+
+        Assert.DoesNotContain(prompt, exported.ToString(), StringComparison.Ordinal);
+        RtfExportWarning warning = Assert.Single(
+            exported.Diagnostics,
+            static candidate => candidate.Subject == "comment-follow-up");
+        Assert.Equal(RtfExportWarningKind.ContentSkipped, warning.Kind);
+        Assert.Contains("prompt body was omitted", warning.Message, StringComparison.Ordinal);
+
+        Comment reopened = Assert.Single(imported.Document.Comments);
+        Assert.Equal(string.Empty, reopened.GetText());
+        Assert.False(reopened.IsFollowUp);
+        Assert.True(imported.Diagnostics.IsEmpty, imported.Diagnostics.ToString());
     }
 
     [Fact]

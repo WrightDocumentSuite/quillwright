@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Text;
+using Quillwright.Diagnostics;
 
 namespace Quillwright.Html;
 
@@ -17,20 +19,125 @@ internal static class HtmlEncoding
     /// <summary>
     /// Decodes a byte stream using the WHATWG precedence: BOM, the HTML prescan, then UTF-8.
     /// </summary>
-    public static string Decode(ReadOnlySpan<byte> bytes)
+    public static string Decode(ReadOnlySpan<byte> bytes) =>
+        Decode(bytes, int.MaxValue, CancellationToken.None);
+
+    /// <summary>
+    /// Decodes a byte stream while bounding the work between cancellation observations.
+    /// </summary>
+    public static string Decode(ReadOnlySpan<byte> bytes, CancellationToken cancellationToken) =>
+        Decode(bytes, int.MaxValue, cancellationToken);
+
+    /// <summary>
+    /// Decodes a byte stream and stops before retaining more than <paramref name="maxCharacters"/>
+    /// UTF-16 code units.
+    /// </summary>
+    public static string Decode(
+        ReadOnlySpan<byte> bytes,
+        int maxCharacters,
+        CancellationToken cancellationToken)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxCharacters, 1);
+        cancellationToken.ThrowIfCancellationRequested();
+        Encoding encoding;
+        int preambleLength;
         if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
-            return Encoding.UTF8.GetString(bytes[3..]);
+        {
+            encoding = Encoding.UTF8;
+            preambleLength = 3;
+        }
+        else if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+        {
+            encoding = Encoding.Unicode;
+            preambleLength = 2;
+        }
+        else if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
+        {
+            encoding = Encoding.BigEndianUnicode;
+            preambleLength = 2;
+        }
+        else
+        {
+            ReadOnlySpan<byte> prefix = bytes[..Math.Min(bytes.Length, PrescanByteCount)];
+            encoding = Prescan(prefix) ?? Encoding.UTF8;
+            preambleLength = 0;
+        }
 
-        if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
-            return Encoding.Unicode.GetString(bytes[2..]);
+        cancellationToken.ThrowIfCancellationRequested();
+        return DecodeInChunks(bytes[preambleLength..], encoding, maxCharacters, cancellationToken);
+    }
 
-        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
-            return Encoding.BigEndianUnicode.GetString(bytes[2..]);
+    private static string DecodeInChunks(
+        ReadOnlySpan<byte> bytes,
+        Encoding encoding,
+        int maxCharacters,
+        CancellationToken cancellationToken)
+    {
+        const int ByteChunkSize = 32 * 1024;
+        if (bytes.IsEmpty)
+            return string.Empty;
 
-        ReadOnlySpan<byte> prefix = bytes[..Math.Min(bytes.Length, PrescanByteCount)];
-        Encoding encoding = Prescan(prefix) ?? Encoding.UTF8;
-        return encoding.GetString(bytes);
+        int bufferLength = encoding.GetMaxCharCount(Math.Min(bytes.Length, ByteChunkSize));
+        char[] characters = ArrayPool<char>.Shared.Rent(bufferLength);
+        var decoded = new StringBuilder(Math.Min(Math.Min(bytes.Length, maxCharacters), 1024 * 1024));
+        Decoder decoder = encoding.GetDecoder();
+        try
+        {
+            int position = 0;
+            while (position < bytes.Length)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int byteCount = Math.Min(ByteChunkSize, bytes.Length - position);
+                bool flush = position + byteCount == bytes.Length;
+                ReadOnlySpan<byte> remaining = bytes.Slice(position, byteCount);
+                bool completed;
+                do
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    decoder.Convert(
+                        remaining,
+                        characters,
+                        flush,
+                        out int bytesUsed,
+                        out int charactersUsed,
+                        out completed);
+                    if (charactersUsed > 0)
+                    {
+                        long observed = (long)decoded.Length + charactersUsed;
+                        DocumentLoadBudgetState.Ensure(
+                            nameof(DocumentLoadBudget.MaxTextCharacters), maxCharacters, observed);
+                        decoded.Append(characters, 0, charactersUsed);
+                    }
+
+                    position += bytesUsed;
+                    remaining = remaining[bytesUsed..];
+                    if (bytesUsed == 0 && charactersUsed == 0 && !completed)
+                        throw new InvalidOperationException("The selected HTML decoder made no progress.");
+                }
+                while (!remaining.IsEmpty || (flush && !completed));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            return string.Create(
+                decoded.Length,
+                (Decoded: decoded, CancellationToken: cancellationToken),
+                static (destination, state) =>
+                {
+                    int position = 0;
+                    foreach (ReadOnlyMemory<char> chunk in state.Decoded.GetChunks())
+                    {
+                        state.CancellationToken.ThrowIfCancellationRequested();
+                        chunk.Span.CopyTo(destination[position..]);
+                        position += chunk.Length;
+                    }
+
+                    state.CancellationToken.ThrowIfCancellationRequested();
+                });
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(characters);
+        }
     }
 
     private static Encoding? Prescan(ReadOnlySpan<byte> bytes)

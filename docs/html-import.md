@@ -5,8 +5,8 @@ recovered into a document tree by the ordinary HTML document parser. Use
 `HtmlImporter.ImportFragment` when the caller has a real fragment and knows the element whose
 `innerHTML` it represents. The mapping shares the supported constructs listed below with
 [the exporter](html-export.md), including headings, lists, tables and formatting. It does not
-yet reconstruct every exported construct, notably notes, so it is a semantic conversion rather
-than a general round-trip guarantee. The importer is built for HTML that editors, exporters and
+reconstruct page layout, floating positions or every browser-only construct, so it is a semantic
+conversion rather than a general round-trip guarantee. The importer is built for HTML that editors, exporters and
 language models actually produce, including the
 `mso-` styles and `<o:p>` wrappers Word's own HTML carries, which are stepped over.
 
@@ -45,7 +45,12 @@ and depth, and both individual and total image payloads. File lengths and local 
 are checked before allocation; a base64 data URI is size-checked before decoding. A breach throws
 `DocumentLoadLimitException`, not an import diagnostic. See
 [loading-untrusted-input.md](loading-untrusted-input.md) for a shared DOCX/DOC/HTML/Markdown/RTF
-policy.
+policy. `ImportFileAsync` carries its cancellation token through byte reading, decoding,
+tokenization, tree construction, note discovery and model mapping. Byte decoding uses a
+stateful decoder in bounded chunks (including the final string copy), so cancellation does not
+wait for an entire large legacy-encoded file to materialize. The same pass enforces
+`MaxTextCharacters` before appending an over-limit chunk, rather than retaining the whole
+decoded string and rejecting it afterward.
 
 ## The mapping
 
@@ -60,8 +65,9 @@ policy.
 | Inline CSS: `color`, `background`, `font-weight/style/size/family/variant`, `text-decoration`, `text-align`, list `list-style-type` | The formatting Word can also say; `mso-*` properties are ignored |
 | `a href` | A real `Hyperlink`; `#fragment` becomes an anchor; `a id`/`name` becomes a bookmark |
 | `ul`/`ol`/`li`, nested | Real numbering instances on `ListParagraph`; every nested list keeps its own owner, marker kind and start, while `ol start`/`type`/`reversed`, `li type` and `li value` determine the actual counters |
-| `table` with `thead`, `th`, `colspan`, `rowspan` | A real table on `TableGrid`: header rows, grid spans, vertical merges with their continuation cells |
+| `table` with `caption`, `thead`, `th`, `colspan`, `rowspan` | A real table on `TableGrid`: accessible caption, header rows, grid spans, vertical merges with their continuation cells |
 | `img` | The image embedded from a base64 `data:` URI or from `MediaDirectory`; otherwise its alt text, with a diagnostic; `width`/`height` in pixels or CSS set the size |
+| Quillwright `sup` references plus `section.footnotes > ol > li` definitions | Real footnotes/endnotes and `NoteReference` objects; repeated references share one note and multi-paragraph bodies stay multi-paragraph |
 | `br`, `hr` | A line break; a bottom-ruled paragraph |
 | Entities | The characters they name: the common names and every numeric form |
 | `<title>` | `document.Properties.Title` |
@@ -72,6 +78,28 @@ diagnostic naming it and its line; an element the importer does not model is unw
 with a diagnostic naming it as well. A remote image is never fetched — nothing in
 this library opens a network connection — and a relative path is resolved only inside
 `MediaDirectory`.
+
+HTML itself defines no dedicated footnote element. The importer therefore recognizes the
+reciprocal-link convention produced by Quillwright: definition ids
+`fn-<positive-id>-<ordinal>` and `en-<positive-id>-<ordinal>` inside a `footnotes` section,
+with an exact `sup` reference id and a backlink from the matching definition to that same id.
+Recognition is rooted by such a reference outside the candidate `footnotes` section; references
+inside a confirmed note can then discover later, cyclic or self-referenced notes. A reciprocal
+pair wholly self-contained in an otherwise ordinary lookalike section is not enough to claim
+that content. A lookalike id on its own is likewise ordinary HTML.
+The importer restores the original note kind and id, adds the Word note-number mark and
+separator records, and excludes the confirmed backlink arrow from note text. It removes the
+preceding `hr` and the whole definition section only when every significant child belongs to
+the generated shape. In a mixed `footnotes` section, only confirmed definition items are
+consumed, so arbitrary sibling paragraphs and list items remain in the main story. Definitions
+are collected before bodies are mapped, so a note can refer to a later note without recursion.
+Definition backlinks are indexed once by `(label, reference-id)`; even adversarial duplicate
+definitions therefore retain deterministic first-wins behavior without rescanning every
+candidate for every reference.
+Duplicate/malformed labels and reciprocal ids are deterministic first-wins recoveries reported
+as `NoteMalformed`; a reference without a definition, or a definition without a reciprocal
+pair, is reported as `NoteDangling` and remains visible ordinary content instead of silently
+disappearing.
 
 An inline CSS `list-style-type` overrides the older HTML `type` hint and is inherited through
 flow containers and list items. The Word-compatible subset is `decimal`,

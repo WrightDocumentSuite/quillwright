@@ -24,21 +24,30 @@ public static class HtmlImporter
     /// <summary>Imports HTML into a new document.</summary>
     /// <param name="html">The HTML source, a full page or a fragment.</param>
     /// <param name="options">How to import it, or <see langword="null"/> for the defaults.</param>
-    public static HtmlImportResult Import(string html, HtmlImportOptions? options = null)
+    public static HtmlImportResult Import(string html, HtmlImportOptions? options = null) =>
+        ImportCore(html, options, CancellationToken.None);
+
+    private static HtmlImportResult ImportCore(
+        string html,
+        HtmlImportOptions? options,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(html);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        var context = new ImportContext(options ?? new HtmlImportOptions());
+        var context = new ImportContext(options ?? new HtmlImportOptions(), cancellationToken);
         context.Budget.ValidateText(html);
-        HtmlElement root = HtmlParser.Parse(html, context.Budget);
+        HtmlElement root = HtmlParser.ParseWithCancellation(html, context.Budget, cancellationToken);
 
-        if (FindElement(root, "title") is { } title)
-            context.Document.Properties.Title = NormalizeWhitespace(PlainText(title)).Trim(' ');
+        if (FindElement(root, "title", cancellationToken) is { } title)
+            context.Document.Properties.Title = NormalizeWhitespace(PlainText(title, cancellationToken), cancellationToken).Trim(' ');
 
-        HtmlElement body = FindElement(root, "body") ?? root;
-        var blocks = new BlockTarget(context.Document.Sections[0].Blocks);
+        HtmlElement body = FindElement(root, "body", cancellationToken) ?? root;
+        CollectNotes(body, context);
+        var blocks = new BlockTarget(context.Document.Sections[0].Blocks, cancellationToken);
         MapBlocks(body, context, blocks, new Inherited());
         blocks.Flush();
+        ReportUnusedNotes(context);
 
         if (context.Document.Sections[0].Blocks.Count == 0)
             context.Document.Sections[0].AddParagraph(string.Empty);
@@ -60,17 +69,28 @@ public static class HtmlImporter
     public static HtmlImportResult ImportFragment(
         string html,
         string contextElement = "body",
-        HtmlImportOptions? options = null)
+        HtmlImportOptions? options = null) =>
+        ImportFragmentCore(html, contextElement, options, CancellationToken.None);
+
+    private static HtmlImportResult ImportFragmentCore(
+        string html,
+        string contextElement,
+        HtmlImportOptions? options,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(html);
         ArgumentException.ThrowIfNullOrEmpty(contextElement);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        var context = new ImportContext(options ?? new HtmlImportOptions());
+        var context = new ImportContext(options ?? new HtmlImportOptions(), cancellationToken);
         context.Budget.ValidateText(html);
-        HtmlElement fragment = HtmlParser.ParseFragment(html, contextElement, budget: context.Budget);
-        var blocks = new BlockTarget(context.Document.Sections[0].Blocks);
+        HtmlElement fragment = HtmlParser.ParseFragmentWithCancellation(
+            html, contextElement, budget: context.Budget, cancellationToken: cancellationToken);
+        CollectNotes(fragment, context);
+        var blocks = new BlockTarget(context.Document.Sections[0].Blocks, cancellationToken);
         MapBlocks(fragment, context, blocks, new Inherited());
         blocks.Flush();
+        ReportUnusedNotes(context);
 
         if (context.Document.Sections[0].Blocks.Count == 0)
             context.Document.Sections[0].AddParagraph(string.Empty);
@@ -91,19 +111,22 @@ public static class HtmlImporter
 
         options ??= new HtmlImportOptions();
         byte[] bytes = await DocumentInput.ReadFileBytesAsync(path, options.Budget, cancellationToken).ConfigureAwait(false);
-        string html = HtmlEncoding.Decode(bytes);
+        cancellationToken.ThrowIfCancellationRequested();
+        string html = HtmlEncoding.Decode(bytes, options.Budget.MaxTextCharacters, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (options.MediaDirectory is null)
             options = options with { MediaDirectory = Path.GetDirectoryName(Path.GetFullPath(path)) };
 
-        return Import(html, options);
+        return ImportCore(html, options, cancellationToken);
     }
 
     private sealed class ImportContext
     {
-        public ImportContext(HtmlImportOptions options)
+        public ImportContext(HtmlImportOptions options, CancellationToken cancellationToken)
         {
             Options = options;
             Budget = new DocumentLoadBudgetState(options.Budget);
+            CancellationToken = cancellationToken;
             Document = WordDocument.Create();
             Numbering = new NumberingBuilder(Document.Numbering);
         }
@@ -112,11 +135,23 @@ public static class HtmlImporter
 
         public DocumentLoadBudgetState Budget { get; }
 
+        public CancellationToken CancellationToken { get; }
+
         public WordDocument Document { get; }
 
         public NumberingBuilder Numbering { get; }
 
         public HtmlImportDiagnostics Diagnostics { get; } = new();
+
+        public Dictionary<string, ImportedHtmlNote> NotesByLabel { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<HtmlNoteIdentity> NoteIdentities { get; } = [];
+
+        public List<ImportedHtmlNote> ImportedNotes { get; } = [];
+
+        public HashSet<string> NoteReferenceIds { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<HtmlElement> IgnoredElements { get; } = new(ReferenceEqualityComparer.Instance);
 
         public int NextBookmarkId { get; set; } = 1;
 
@@ -137,7 +172,7 @@ public static class HtmlImporter
                 try
                 {
                     ReadOnlySpan<char> encoded = source.AsSpan(comma + 1);
-                    Budget.EnsureMedia(EstimatedBase64Bytes(encoded));
+                    Budget.EnsureMedia(EstimatedBase64Bytes(encoded, CancellationToken));
                     byte[] bytes = Convert.FromBase64String(source[(comma + 1)..]);
                     Budget.AddMedia(bytes.LongLength);
                     return Document.Media.Add(ImageData.FromBytes(bytes));
@@ -209,12 +244,14 @@ public static class HtmlImporter
             return Document.Media.Add(ImageData.FromBytes(file.Bytes!));
         }
 
-        private static long EstimatedBase64Bytes(ReadOnlySpan<char> encoded)
+        private static long EstimatedBase64Bytes(ReadOnlySpan<char> encoded, CancellationToken cancellationToken)
         {
             long characters = 0;
             int padding = 0;
             for (int i = 0; i < encoded.Length; i++)
             {
+                if ((i & 0xFFF) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
                 char character = encoded[i];
                 if (char.IsWhiteSpace(character))
                     continue;
@@ -225,6 +262,745 @@ public static class HtmlImporter
             long bytes = ((characters + 3) / 4) * 3 - Math.Min(padding, 2);
             return Math.Max(0, bytes);
         }
+    }
+
+    private readonly record struct HtmlNoteIdentity(bool IsEndnote, int Id);
+
+    private readonly record struct HtmlNotePairKey(string Label, string ReferenceId);
+
+    private sealed class ImportedHtmlNote
+    {
+        public required string Label { get; init; }
+
+        public required Note Note { get; init; }
+
+        public required HtmlElement Definition { get; init; }
+
+        public HashSet<string> BacklinkIds { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<string> ReferenceIds { get; } = new(StringComparer.Ordinal);
+
+        public int ReferenceCount { get; set; }
+    }
+
+    private sealed class HtmlNoteSection
+    {
+        public required HtmlElement Section { get; init; }
+
+        public required HtmlElement? List { get; init; }
+
+        public required HtmlElement? PreviousSignificantElement { get; init; }
+
+        public HashSet<HtmlElement> ImportedDefinitions { get; } = new(ReferenceEqualityComparer.Instance);
+    }
+
+    private sealed class HtmlNoteDefinition
+    {
+        public required HtmlNoteSection Section { get; init; }
+
+        public required HtmlElement Definition { get; init; }
+
+        public required string Label { get; init; }
+
+        public required HtmlNoteIdentity Identity { get; init; }
+
+        public Dictionary<string, List<HtmlElement>> BacklinksByReferenceId { get; } = new(StringComparer.Ordinal);
+
+        public ImportedHtmlNote? Imported { get; set; }
+    }
+
+    private sealed class HtmlNoteReferenceCandidate
+    {
+        public required string Label { get; init; }
+
+        public required string ReferenceId { get; init; }
+
+        public required HtmlNoteSection? SourceSection { get; init; }
+
+        public required HtmlElement? SourceDefinition { get; init; }
+
+        public required bool IsMappable { get; init; }
+    }
+
+    private sealed class HtmlNoteDiscovery
+    {
+        public List<HtmlNoteSection> Sections { get; } = [];
+
+        public List<HtmlNoteReferenceCandidate> References { get; } = [];
+    }
+
+    private static void CollectNotes(HtmlElement root, ImportContext context)
+    {
+        HtmlNoteDiscovery discovery = DiscoverNoteShapes(root, context.CancellationToken);
+        var definitionsByLabel = new Dictionary<string, List<HtmlNoteDefinition>>(StringComparer.Ordinal);
+        var definitionsByElement = new Dictionary<HtmlElement, HtmlNoteDefinition>(ReferenceEqualityComparer.Instance);
+        var definitionsByPair = new Dictionary<HtmlNotePairKey, HtmlNoteDefinition>();
+        var ambiguousPairs = new HashSet<HtmlNotePairKey>();
+        foreach (HtmlNoteSection candidate in discovery.Sections)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            HtmlElement section = candidate.Section;
+            HtmlElement? list = candidate.List;
+            if (list is null)
+            {
+                context.Diagnostics.Add(
+                    HtmlImportWarningKind.NoteMalformed,
+                    "A footnotes section without its ordered definition list was kept as ordinary content.",
+                    "footnotes-section",
+                    section.Line);
+                continue;
+            }
+
+            foreach (HtmlElement definition in list.Children.OfType<HtmlElement>().Where(static child => child.Is("li")))
+            {
+                context.CancellationToken.ThrowIfCancellationRequested();
+                string? label = definition.Attribute("id");
+                if (!TryParseNoteLabel(label, out HtmlNoteIdentity identity))
+                {
+                    context.Diagnostics.Add(
+                        HtmlImportWarningKind.NoteMalformed,
+                        "A note definition has no valid Quillwright note label and was kept as ordinary content.",
+                        label ?? "note-definition",
+                        definition.Line);
+                    continue;
+                }
+
+                var noteDefinition = new HtmlNoteDefinition
+                {
+                    Section = candidate,
+                    Definition = definition,
+                    Label = label!,
+                    Identity = identity,
+                };
+                CollectDirectBacklinks(noteDefinition, context.CancellationToken);
+                IndexDefinitionPairs(noteDefinition, definitionsByPair, ambiguousPairs, context);
+                definitionsByElement.Add(definition, noteDefinition);
+                if (!definitionsByLabel.TryGetValue(label!, out List<HtmlNoteDefinition>? sameLabel))
+                {
+                    sameLabel = [];
+                    definitionsByLabel.Add(label!, sameLabel);
+                }
+
+                sameLabel.Add(noteDefinition);
+            }
+        }
+
+        var referencesByDefinition = new Dictionary<HtmlElement, List<HtmlNoteReferenceCandidate>>(
+            ReferenceEqualityComparer.Instance);
+        var selectedDefinitionsByLabel = new Dictionary<string, HtmlNoteDefinition>(StringComparer.Ordinal);
+        var pendingReferences = new Queue<HtmlNoteReferenceCandidate>();
+        foreach (HtmlNoteReferenceCandidate reference in discovery.References)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            if (reference.SourceDefinition is { } sourceDefinition &&
+                definitionsByElement.ContainsKey(sourceDefinition))
+            {
+                if (!referencesByDefinition.TryGetValue(sourceDefinition, out List<HtmlNoteReferenceCandidate>? nested))
+                {
+                    nested = [];
+                    referencesByDefinition.Add(sourceDefinition, nested);
+                }
+
+                nested.Add(reference);
+            }
+            else if (reference.SourceSection is null && reference.IsMappable)
+            {
+                pendingReferences.Enqueue(reference);
+            }
+        }
+
+        while (pendingReferences.Count > 0)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            HtmlNoteReferenceCandidate reference = pendingReferences.Dequeue();
+            HtmlNoteDefinition? definition = ResolvePairedDefinition(
+                reference, definitionsByPair, selectedDefinitionsByLabel);
+            if (definition is null)
+                continue;
+
+            ImportedHtmlNote imported;
+            if (definition.Imported is { } existing)
+            {
+                imported = existing;
+            }
+            else
+            {
+                if (context.NotesByLabel.ContainsKey(definition.Label) ||
+                    !context.NoteIdentities.Add(definition.Identity))
+                {
+                    continue;
+                }
+
+                EnsureNoteScaffolding(context.Document, definition.Identity.IsEndnote);
+                var note = new Note(context.Document, definition.Identity.IsEndnote) { Id = definition.Identity.Id };
+                (definition.Identity.IsEndnote ? context.Document.EndnoteList : context.Document.FootnoteList).Add(note);
+                imported = new ImportedHtmlNote
+                {
+                    Label = definition.Label,
+                    Note = note,
+                    Definition = definition.Definition,
+                };
+                definition.Imported = imported;
+                selectedDefinitionsByLabel.Add(definition.Label, definition);
+                context.NotesByLabel.Add(definition.Label, imported);
+                context.ImportedNotes.Add(imported);
+                context.IgnoredElements.Add(definition.Definition);
+                definition.Section.ImportedDefinitions.Add(definition.Definition);
+
+                if (referencesByDefinition.TryGetValue(
+                    definition.Definition, out List<HtmlNoteReferenceCandidate>? nestedReferences))
+                {
+                    foreach (HtmlNoteReferenceCandidate nestedReference in nestedReferences)
+                    {
+                        if (nestedReference.IsMappable)
+                            pendingReferences.Enqueue(nestedReference);
+                    }
+                }
+            }
+
+            foreach (HtmlElement backlink in definition.BacklinksByReferenceId[reference.ReferenceId])
+                context.IgnoredElements.Add(backlink);
+            imported.BacklinkIds.Add(reference.ReferenceId);
+        }
+
+        ReportUnrecognizedDefinitions(discovery, definitionsByLabel, context);
+        foreach (HtmlNoteSection candidate in discovery.Sections)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            if (candidate.List is { } list && IsWholeGeneratedNoteSection(
+                candidate.Section,
+                list,
+                candidate.ImportedDefinitions,
+                context.CancellationToken))
+            {
+                context.IgnoredElements.Add(candidate.Section);
+                if (candidate.PreviousSignificantElement is { } separator && separator.Is("hr"))
+                    context.IgnoredElements.Add(separator);
+            }
+        }
+
+        foreach (ImportedHtmlNote imported in context.ImportedNotes)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            MapNoteBody(imported, context);
+        }
+    }
+
+    private static HtmlNoteDiscovery DiscoverNoteShapes(HtmlElement root, CancellationToken cancellationToken)
+    {
+        var discovery = new HtmlNoteDiscovery();
+        var pending = new Stack<(
+            HtmlElement Element,
+            HtmlElement? PreviousSignificantElement,
+            HtmlNoteSection? FootnotesSection,
+            HtmlElement? Definition,
+            bool DescendantsSkipped)>();
+        pending.Push((root, null, null, null, false));
+        while (pending.Count > 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            (
+                HtmlElement current,
+                HtmlElement? previousSignificantElement,
+                HtmlNoteSection? footnotesSection,
+                HtmlElement? definition,
+                bool descendantsSkipped) = pending.Pop();
+            if (current.Is("section") && HasClass(current, "footnotes"))
+            {
+                footnotesSection = new HtmlNoteSection
+                {
+                    Section = current,
+                    List = current.Children.OfType<HtmlElement>().FirstOrDefault(static child => child.Is("ol")),
+                    PreviousSignificantElement = previousSignificantElement,
+                };
+                definition = null;
+                discovery.Sections.Add(footnotesSection);
+            }
+
+            if (footnotesSection?.List is { } definitions &&
+                ReferenceEquals(current.Parent, definitions) && current.Is("li"))
+            {
+                definition = current;
+            }
+
+            if (TryReadExactNoteReference(current, out string label, out string referenceId))
+            {
+                discovery.References.Add(new HtmlNoteReferenceCandidate
+                {
+                    Label = label,
+                    ReferenceId = referenceId,
+                    SourceSection = footnotesSection,
+                    SourceDefinition = definition,
+                    IsMappable = !descendantsSkipped,
+                });
+            }
+
+            descendantsSkipped |= SkipsDescendantContent(current);
+            var children = new List<(
+                HtmlElement Element,
+                HtmlElement? PreviousSignificantElement,
+                HtmlNoteSection? FootnotesSection,
+                HtmlElement? Definition,
+                bool DescendantsSkipped)>();
+            HtmlElement? previous = null;
+            foreach (HtmlNode node in current.Children)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (node is HtmlElement child)
+                    children.Add((child, previous, footnotesSection, definition, descendantsSkipped));
+
+                if (node is not HtmlText whitespace || !whitespace.Value.All(IsCollapsibleWhitespace))
+                    previous = node as HtmlElement;
+            }
+
+            for (int index = children.Count - 1; index >= 0; index--)
+                pending.Push(children[index]);
+        }
+
+        return discovery;
+    }
+
+    private static bool SkipsDescendantContent(HtmlElement element) =>
+        element.Name is "template" or "script" or "style" or "iframe" or "object" or "embed" or "form" or "button"
+            or "select" or "textarea" or "input" or "canvas" or "svg" or "audio" or "video" or "head" or "meta"
+            or "link" or "base" or "title" or "colgroup" or "col" or "caption";
+
+    private static bool HasClass(HtmlElement element, string expected)
+    {
+        string? classes = element.Attribute("class");
+        if (classes is null)
+            return false;
+
+        foreach (Range range in classes.AsSpan().SplitAny(" \t\n\f\r"))
+        {
+            if (classes.AsSpan(range).SequenceEqual(expected))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void CollectDirectBacklinks(
+        HtmlNoteDefinition definition,
+        CancellationToken cancellationToken)
+    {
+        foreach (HtmlNode node in definition.Definition.Children)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (node is not HtmlElement link || !link.Is("a") ||
+                link.Attribute("href") is not { Length: > 1 } href || href[0] != '#')
+            {
+                continue;
+            }
+
+            string referenceId = href[1..];
+            if (!IsNoteReferenceId(definition.Label, referenceId))
+                continue;
+
+            if (!definition.BacklinksByReferenceId.TryGetValue(referenceId, out List<HtmlElement>? backlinks))
+            {
+                backlinks = [];
+                definition.BacklinksByReferenceId.Add(referenceId, backlinks);
+            }
+
+            backlinks.Add(link);
+        }
+    }
+
+    private static void IndexDefinitionPairs(
+        HtmlNoteDefinition definition,
+        Dictionary<HtmlNotePairKey, HtmlNoteDefinition> definitionsByPair,
+        HashSet<HtmlNotePairKey> ambiguousPairs,
+        ImportContext context)
+    {
+        foreach (string referenceId in definition.BacklinksByReferenceId.Keys)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            var key = new HtmlNotePairKey(definition.Label, referenceId);
+            if (definitionsByPair.TryAdd(key, definition) || !ambiguousPairs.Add(key))
+                continue;
+
+            context.Diagnostics.Add(
+                HtmlImportWarningKind.NoteMalformed,
+                "Multiple note definitions claim the same reciprocal reference; the first definition wins.",
+                referenceId,
+                definition.Definition.Line);
+        }
+    }
+
+    private static HtmlNoteDefinition? ResolvePairedDefinition(
+        HtmlNoteReferenceCandidate reference,
+        Dictionary<HtmlNotePairKey, HtmlNoteDefinition> definitionsByPair,
+        Dictionary<string, HtmlNoteDefinition> selectedDefinitionsByLabel)
+    {
+        if (selectedDefinitionsByLabel.TryGetValue(reference.Label, out HtmlNoteDefinition? selected))
+        {
+            return selected.BacklinksByReferenceId.ContainsKey(reference.ReferenceId)
+                ? selected
+                : null;
+        }
+
+        return definitionsByPair.GetValueOrDefault(new HtmlNotePairKey(reference.Label, reference.ReferenceId));
+    }
+
+    private static void ReportUnrecognizedDefinitions(
+        HtmlNoteDiscovery discovery,
+        Dictionary<string, List<HtmlNoteDefinition>> definitionsByLabel,
+        ImportContext context)
+    {
+        var referencedPairs = new HashSet<(string Label, string ReferenceId)>();
+        foreach (HtmlNoteReferenceCandidate reference in discovery.References)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            referencedPairs.Add((reference.Label, reference.ReferenceId));
+        }
+
+        foreach (List<HtmlNoteDefinition> definitions in definitionsByLabel.Values)
+        {
+            foreach (HtmlNoteDefinition definition in definitions)
+            {
+                context.CancellationToken.ThrowIfCancellationRequested();
+                if (definition.Imported is not null)
+                    continue;
+
+                bool hasReciprocalShape = false;
+                foreach (string referenceId in definition.BacklinksByReferenceId.Keys)
+                {
+                    context.CancellationToken.ThrowIfCancellationRequested();
+                    if (referencedPairs.Contains((definition.Label, referenceId)))
+                    {
+                        hasReciprocalShape = true;
+                        break;
+                    }
+                }
+
+                bool conflictsWithImported = context.NotesByLabel.ContainsKey(definition.Label) ||
+                    context.NoteIdentities.Contains(definition.Identity);
+                if (hasReciprocalShape && conflictsWithImported)
+                {
+                    context.Diagnostics.Add(
+                        HtmlImportWarningKind.NoteMalformed,
+                        "A duplicate note definition was kept as ordinary content; the first reciprocal definition wins.",
+                        definition.Label,
+                        definition.Definition.Line);
+                }
+                else
+                {
+                    context.Diagnostics.Add(
+                        HtmlImportWarningKind.NoteDangling,
+                        "A note definition has no externally rooted reciprocal pair and was kept as ordinary content.",
+                        definition.Label,
+                        definition.Definition.Line);
+                }
+            }
+        }
+    }
+
+    private static bool IsWholeGeneratedNoteSection(
+        HtmlElement section,
+        HtmlElement list,
+        HashSet<HtmlElement> importedDefinitions,
+        CancellationToken cancellationToken)
+    {
+        if (importedDefinitions.Count == 0)
+            return false;
+
+        bool foundList = false;
+        foreach (HtmlNode node in section.Children)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (node is HtmlText whitespace && whitespace.Value.All(IsCollapsibleWhitespace))
+                continue;
+
+            if (!foundList && ReferenceEquals(node, list))
+            {
+                foundList = true;
+                continue;
+            }
+
+            return false;
+        }
+
+        if (!foundList)
+            return false;
+
+        bool foundDefinition = false;
+        foreach (HtmlNode node in list.Children)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (node is HtmlText whitespace && whitespace.Value.All(IsCollapsibleWhitespace))
+                continue;
+
+            if (node is HtmlElement definition && definition.Is("li") && importedDefinitions.Contains(definition))
+            {
+                foundDefinition = true;
+                continue;
+            }
+
+            return false;
+        }
+
+        return foundDefinition;
+    }
+
+    private static bool TryReadNoteReferenceTarget(
+        HtmlElement superscript,
+        out string label,
+        out string? referenceId)
+    {
+        label = string.Empty;
+        referenceId = null;
+        if (!superscript.Is("sup"))
+            return false;
+
+        HtmlElement? link = null;
+        foreach (HtmlNode child in superscript.Children)
+        {
+            if (child is HtmlText whitespace && whitespace.Value.All(IsCollapsibleWhitespace))
+                continue;
+            if (child is not HtmlElement element || !element.Is("a") || link is not null)
+                return false;
+            link = element;
+        }
+
+        string? href = link?.Attribute("href");
+        if (href is not { Length: > 1 } || href[0] != '#')
+            return false;
+
+        label = href[1..];
+        referenceId = superscript.Attribute("id");
+        return true;
+    }
+
+    private static bool TryReadExactNoteReference(
+        HtmlElement superscript,
+        out string label,
+        out string referenceId)
+    {
+        if (TryReadNoteReferenceTarget(superscript, out label, out string? candidateId) &&
+            candidateId is not null && IsNoteReferenceId(label, candidateId))
+        {
+            referenceId = candidateId;
+            return true;
+        }
+
+        referenceId = string.Empty;
+        return false;
+    }
+
+    private static void MapNoteBody(ImportedHtmlNote imported, ImportContext context)
+    {
+        string bodyStyle = imported.Note.IsEndnote ? "EndnoteText" : "FootnoteText";
+        string referenceStyle = imported.Note.IsEndnote ? "EndnoteReference" : "FootnoteReference";
+        context.Document.Styles.GetOrAdd(bodyStyle);
+        context.Document.Styles.GetOrAdd(referenceStyle, StyleKind.Character);
+        var inherited = new Inherited { StyleId = bodyStyle };
+        var target = new BlockTarget(imported.Note.Blocks, context.CancellationToken);
+        bool markerAdded = false;
+
+        foreach (HtmlNode node in imported.Definition.Children)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            if (node is HtmlElement ignored && context.IgnoredElements.Contains(ignored))
+                continue;
+            if (!markerAdded && node is HtmlText whitespace && whitespace.Value.All(IsCollapsibleWhitespace))
+                continue;
+
+            if (!markerAdded)
+            {
+                target.Open(inherited).AppendObject(
+                    new NoteNumberMark { IsEndnote = imported.Note.IsEndnote },
+                    RunFormat.Default with { StyleId = referenceStyle });
+                target.AppendText(" ", inherited);
+                markerAdded = true;
+
+                if (node is HtmlElement paragraph && paragraph.Is("p"))
+                {
+                    MapBlocks(paragraph, context, target, WithCss(paragraph, context, inherited));
+                    target.Flush();
+                    continue;
+                }
+            }
+
+            MapNode(node, context, target, inherited);
+        }
+
+        if (!markerAdded)
+        {
+            target.Open(inherited).AppendObject(
+                new NoteNumberMark { IsEndnote = imported.Note.IsEndnote },
+                RunFormat.Default with { StyleId = referenceStyle });
+            target.AppendText(" ", inherited);
+        }
+
+        target.Flush();
+    }
+
+    private static void MapNode(HtmlNode node, ImportContext context, BlockTarget target, Inherited inherited)
+    {
+        switch (node)
+        {
+            case HtmlText text:
+                target.AppendText(text.Value, inherited);
+                break;
+            case HtmlElement element:
+                MapElement(element, context, target, inherited);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private static bool TryMapNoteReference(
+        HtmlElement superscript,
+        ImportContext context,
+        BlockTarget target,
+        Inherited inherited)
+    {
+        if (!TryReadNoteReferenceTarget(superscript, out string label, out string? referenceId))
+            return false;
+
+        if (!context.NotesByLabel.TryGetValue(label, out ImportedHtmlNote? imported))
+        {
+            if (LooksLikeNoteLabel(label))
+            {
+                context.Diagnostics.Add(
+                    HtmlImportWarningKind.NoteDangling,
+                    "A note reference has no matching definition and was kept as an ordinary link.",
+                    label,
+                    superscript.Line);
+            }
+
+            return false;
+        }
+
+        if (referenceId is null || !IsNoteReferenceId(label, referenceId))
+        {
+            context.Diagnostics.Add(
+                HtmlImportWarningKind.NoteMalformed,
+                "A note reference has a malformed reciprocal identifier and was kept as an ordinary link.",
+                label,
+                superscript.Line);
+            return false;
+        }
+
+        if (!imported.BacklinkIds.Contains(referenceId))
+        {
+            context.Diagnostics.Add(
+                HtmlImportWarningKind.NoteMalformed,
+                "A note reference has no matching reciprocal backlink and was kept as an ordinary link.",
+                referenceId,
+                superscript.Line);
+            return false;
+        }
+
+        imported.ReferenceIds.Add(referenceId);
+        if (!context.NoteReferenceIds.Add(referenceId))
+        {
+            context.Diagnostics.Add(
+                HtmlImportWarningKind.NoteMalformed,
+                "A duplicate note reference identifier was recovered as another reference.",
+                referenceId,
+                superscript.Line);
+        }
+
+        string referenceStyle = imported.Note.IsEndnote ? "EndnoteReference" : "FootnoteReference";
+        context.Document.Styles.GetOrAdd(referenceStyle, StyleKind.Character);
+        target.Open(inherited).AppendObject(
+            new NoteReference { IsEndnote = imported.Note.IsEndnote, Id = imported.Note.Id },
+            RunFormat.Default with { StyleId = referenceStyle });
+        imported.ReferenceCount++;
+        return true;
+    }
+
+    private static void ReportUnusedNotes(ImportContext context)
+    {
+        foreach (ImportedHtmlNote imported in context.ImportedNotes)
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            if (imported.ReferenceCount == 0)
+            {
+                context.Diagnostics.Add(
+                    HtmlImportWarningKind.NoteDangling,
+                    "A note definition has no matching reference; the note body was retained.",
+                    imported.Label,
+                    imported.Definition.Line);
+            }
+
+            foreach (string referenceId in imported.ReferenceIds)
+            {
+                if (!imported.BacklinkIds.Contains(referenceId))
+                {
+                    context.Diagnostics.Add(
+                        HtmlImportWarningKind.NoteMalformed,
+                        "A note reference has no matching reciprocal backlink.",
+                        referenceId,
+                        imported.Definition.Line);
+                }
+            }
+
+            foreach (string backlinkId in imported.BacklinkIds)
+            {
+                if (!imported.ReferenceIds.Contains(backlinkId))
+                {
+                    context.Diagnostics.Add(
+                        HtmlImportWarningKind.NoteMalformed,
+                        "A reciprocal note backlink has no matching reference.",
+                        backlinkId,
+                        imported.Definition.Line);
+                }
+            }
+        }
+    }
+
+    private static bool TryParseNoteLabel(string? label, out HtmlNoteIdentity identity)
+    {
+        identity = default;
+        if (label is null || !LooksLikeNoteLabel(label))
+            return false;
+
+        bool endnote = label.StartsWith("en-", StringComparison.Ordinal);
+        ReadOnlySpan<char> value = label.AsSpan(3);
+        int separator = value.LastIndexOf('-');
+        if (separator <= 0 || separator == value.Length - 1 ||
+            !int.TryParse(value[..separator], NumberStyles.None, CultureInfo.InvariantCulture, out int id) ||
+            !int.TryParse(value[(separator + 1)..], NumberStyles.None, CultureInfo.InvariantCulture, out int ordinal) ||
+            id <= 0 || ordinal <= 0)
+        {
+            return false;
+        }
+
+        identity = new HtmlNoteIdentity(endnote, id);
+        return true;
+    }
+
+    private static bool LooksLikeNoteLabel(string label) =>
+        label.StartsWith("fn-", StringComparison.Ordinal) || label.StartsWith("en-", StringComparison.Ordinal);
+
+    private static bool IsNoteReferenceId(string label, string referenceId)
+    {
+        string prefix = label + "-ref";
+        if (referenceId.Equals(prefix, StringComparison.Ordinal))
+            return true;
+        if (!referenceId.StartsWith(prefix + "-", StringComparison.Ordinal))
+            return false;
+
+        return int.TryParse(referenceId.AsSpan(prefix.Length + 1), NumberStyles.None, CultureInfo.InvariantCulture, out int number) &&
+               number > 1;
+    }
+
+    private static void EnsureNoteScaffolding(WordDocument document, bool isEndnote)
+    {
+        List<Note> notes = isEndnote ? document.EndnoteList : document.FootnoteList;
+        if (notes.Count != 0)
+            return;
+
+        var separator = new Note(document, isEndnote) { Id = -1, Kind = NoteKind.Separator };
+        separator.AddParagraph().AppendObject(new NoteSeparator());
+        var continuation = new Note(document, isEndnote) { Id = 0, Kind = NoteKind.ContinuationSeparator };
+        continuation.AddParagraph().AppendObject(new NoteSeparator { IsContinuation = true });
+        notes.Add(separator);
+        notes.Add(continuation);
     }
 
     /// <summary>What the surrounding elements have already decided about the text inside.</summary>
@@ -257,7 +1033,7 @@ public static class HtmlImporter
     /// Where blocks land, with the paragraph under construction: inline content accumulates
     /// into one paragraph until a block boundary flushes it.
     /// </summary>
-    private sealed class BlockTarget(IList<Block> blocks)
+    private sealed class BlockTarget(IList<Block> blocks, CancellationToken cancellationToken)
     {
         private Paragraph? _open;
         private bool _pendingSpace;
@@ -293,6 +1069,7 @@ public static class HtmlImporter
 
         public void AppendText(string text, in Inherited inherited)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (inherited.Preformatted)
             {
                 AppendPreformatted(text, inherited);
@@ -301,7 +1078,7 @@ public static class HtmlImporter
 
             bool leading = text.Length > 0 && IsCollapsibleWhitespace(text[0]);
             bool trailing = text.Length > 0 && IsCollapsibleWhitespace(text[^1]);
-            string collapsed = NormalizeWhitespace(text).Trim(' ');
+            string collapsed = NormalizeWhitespace(text, cancellationToken).Trim(' ');
 
             if (collapsed.Length == 0)
             {
@@ -320,8 +1097,9 @@ public static class HtmlImporter
         private void AppendPreformatted(string text, in Inherited inherited)
         {
             Paragraph paragraph = Open(inherited);
-            paragraph.AppendText(text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n'), inherited.Format);
+            paragraph.AppendText(NormalizePreformatted(text, cancellationToken), inherited.Format);
             _pendingSpace = false;
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         public void AppendBreak(in Inherited inherited)
@@ -352,6 +1130,7 @@ public static class HtmlImporter
     {
         foreach (HtmlNode node in parent.Children)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             switch (node)
             {
                 case HtmlText text:
@@ -370,55 +1149,61 @@ public static class HtmlImporter
 
     private static void MapElement(HtmlElement element, ImportContext context, BlockTarget target, Inherited inherited)
     {
+        if (context.IgnoredElements.Contains(element))
+            return;
+
+        if (element.Is("sup") && TryMapNoteReference(element, context, target, inherited))
+            return;
+
         switch (element.Name)
         {
             case "h1" or "h2" or "h3" or "h4" or "h5" or "h6":
-            {
-                target.Flush();
-                Inherited heading = WithCss(element, context, inherited) with
                 {
-                    StyleId = context.Document.Styles.GetOrAdd("Heading" + element.Name[1]).Id,
-                };
-                MapBlocks(element, context, target, heading);
-                target.Flush();
-                return;
-            }
+                    target.Flush();
+                    Inherited heading = WithCss(element, context, inherited) with
+                    {
+                        StyleId = context.Document.Styles.GetOrAdd("Heading" + element.Name[1]).Id,
+                    };
+                    MapBlocks(element, context, target, heading);
+                    target.Flush();
+                    return;
+                }
 
             case "p" or "div" or "section" or "article" or "header" or "footer" or "main" or "figure" or "figcaption"
                 or "address" or "aside" or "nav" or "details" or "summary" or "dl" or "dt" or "dd":
-            {
-                target.Flush();
-                MapBlocks(element, context, target, WithCss(element, context, inherited));
-                target.Flush();
-                return;
-            }
+                {
+                    target.Flush();
+                    MapBlocks(element, context, target, WithCss(element, context, inherited));
+                    target.Flush();
+                    return;
+                }
 
             case "blockquote":
-            {
-                target.Flush();
-                Inherited quoted = WithCss(element, context, inherited) with
                 {
-                    StyleId = context.Document.Styles.GetOrAdd("Quote").Id,
-                };
-                MapBlocks(element, context, target, quoted);
-                target.Flush();
-                return;
-            }
+                    target.Flush();
+                    Inherited quoted = WithCss(element, context, inherited) with
+                    {
+                        StyleId = context.Document.Styles.GetOrAdd("Quote").Id,
+                    };
+                    MapBlocks(element, context, target, quoted);
+                    target.Flush();
+                    return;
+                }
 
             case "pre":
-            {
-                target.Flush();
-                Inherited code = inherited with
                 {
-                    Preformatted = true,
-                    StyleId = context.Document.Styles.GetOrAdd("CodeBlock").Id,
-                    Format = inherited.Format with { FontAscii = "Consolas", FontHighAnsi = "Consolas" },
-                };
-                MapBlocks(element, context, target, code);
-                TrimCodeParagraph(target);
-                target.Flush();
-                return;
-            }
+                    target.Flush();
+                    Inherited code = inherited with
+                    {
+                        Preformatted = true,
+                        StyleId = context.Document.Styles.GetOrAdd("CodeBlock").Id,
+                        Format = inherited.Format with { FontAscii = "Consolas", FontHighAnsi = "Consolas" },
+                    };
+                    MapBlocks(element, context, target, code);
+                    TrimCodeParagraph(target);
+                    target.Flush();
+                    return;
+                }
 
             case "ul" or "ol":
                 target.Flush();
@@ -644,6 +1429,7 @@ public static class HtmlImporter
         bool firstItem = true;
         foreach (HtmlNode node in list.Children)
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             if (node is not HtmlElement child)
                 continue;
 
@@ -687,6 +1473,12 @@ public static class HtmlImporter
                     currentMarker = itemMarker;
                 }
 
+                if (context.IgnoredElements.Contains(child))
+                {
+                    firstItem = false;
+                    continue;
+                }
+
                 Inherited currentItem = WithCss(child, context, itemContext) with
                 {
                     NumberingId = currentInstance,
@@ -694,7 +1486,7 @@ public static class HtmlImporter
                     ListStyleTypeSpecified = itemMarkerSpecified,
                 };
                 var itemBlocks = new List<Block>();
-                var itemTarget = new BlockTarget(itemBlocks);
+                var itemTarget = new BlockTarget(itemBlocks, context.CancellationToken);
                 MapBlocks(child, context, itemTarget, currentItem);
                 itemTarget.Flush();
                 NormalizeListItem(itemBlocks, currentItem, definition);
@@ -702,7 +1494,7 @@ public static class HtmlImporter
                     target.Add(block);
                 firstItem = false;
             }
-            else if (child.Name is "ul" or "ol")
+            else if (!context.IgnoredElements.Contains(child) && (child.Name is "ul" or "ol"))
             {
                 MapList(child, context, target, itemContext);
             }
@@ -878,12 +1670,20 @@ public static class HtmlImporter
     {
         var result = new Table();
         result.Format = result.Format with { StyleId = context.Document.Styles.GetOrAdd("TableGrid", StyleKind.Table).Id };
+        if (table.Children.OfType<HtmlElement>().FirstOrDefault(static child => child.Is("caption")) is { } caption)
+        {
+            string text = NormalizeWhitespace(
+                PlainText(caption, context.CancellationToken), context.CancellationToken).Trim(' ');
+            if (text.Length > 0)
+                result.Format = result.Format with { Caption = text };
+        }
 
         // A rowspan opened above owes continuation cells below; the map says where and how wide.
         var pending = new Dictionary<int, (int RowsLeft, int Span)>();
 
         foreach (HtmlElement rowElement in Rows(table))
         {
+            context.CancellationToken.ThrowIfCancellationRequested();
             var row = new TableRow();
             bool header = true;
             int gridColumn = 0;
@@ -912,6 +1712,7 @@ public static class HtmlImporter
 
             foreach (HtmlNode node in rowElement.Children)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 if (node is not HtmlElement cellElement || cellElement.Name is not ("td" or "th"))
                     continue;
 
@@ -930,7 +1731,7 @@ public static class HtmlImporter
                     pending[gridColumn] = (rows - 1, span);
                 }
 
-                var cellTarget = new BlockTarget(cell.Blocks);
+                var cellTarget = new BlockTarget(cell.Blocks, context.CancellationToken);
                 Inherited cellContext = new Inherited() with
                 {
                     Format = cellElement.Name == "th" ? RunFormat.Default with { Bold = true } : RunFormat.Default,
@@ -1034,11 +1835,11 @@ public static class HtmlImporter
                     result = result with { Format = result.Format with { Size = size } };
                     break;
                 case "font-family":
-                {
-                    if (HtmlCssParser.FirstFontFamily(value) is { Length: > 0 } family)
-                        result = result with { Format = result.Format with { FontAscii = family, FontHighAnsi = family } };
-                    break;
-                }
+                    {
+                        if (HtmlCssParser.FirstFontFamily(value) is { Length: > 0 } family)
+                            result = result with { Format = result.Format with { FontAscii = family, FontHighAnsi = family } };
+                        break;
+                    }
 
                 case "font-variant" when value.Contains("small-caps", StringComparison.OrdinalIgnoreCase):
                     result = result with { Format = result.Format with { SmallCaps = true } };
@@ -1209,43 +2010,51 @@ public static class HtmlImporter
         }
     }
 
-    private static HtmlElement? FindElement(HtmlElement parent, string name)
+    private static HtmlElement? FindElement(
+        HtmlElement parent,
+        string name,
+        CancellationToken cancellationToken = default)
     {
         foreach (HtmlNode node in parent.Children)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (node is not HtmlElement element)
                 continue;
 
             if (element.Name == name)
                 return element;
 
-            if (FindElement(element, name) is { } nested)
+            if (FindElement(element, name, cancellationToken) is { } nested)
                 return nested;
         }
 
         return null;
     }
 
-    private static string PlainText(HtmlElement element)
+    private static string PlainText(HtmlElement element, CancellationToken cancellationToken = default)
     {
         var text = new System.Text.StringBuilder();
         foreach (HtmlNode node in element.Children)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (node is HtmlText t)
                 text.Append(t.Value);
             else if (node is HtmlElement child)
-                text.Append(PlainText(child));
+                text.Append(PlainText(child, cancellationToken));
         }
 
         return text.ToString();
     }
 
-    private static string NormalizeWhitespace(string text)
+    private static string NormalizeWhitespace(string text, CancellationToken cancellationToken = default)
     {
         var normalized = new System.Text.StringBuilder(text.Length);
         bool space = false;
-        foreach (char c in text)
+        for (int index = 0; index < text.Length; index++)
         {
+            if ((index & 0xFFF) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+            char c = text[index];
             if (IsCollapsibleWhitespace(c))
             {
                 space = true;
@@ -1261,6 +2070,30 @@ public static class HtmlImporter
 
         if (space)
             normalized.Append(' ');
+
+        return normalized.ToString();
+    }
+
+    private static string NormalizePreformatted(string text, CancellationToken cancellationToken)
+    {
+        if (text.IndexOf('\r') < 0)
+            return text;
+
+        var normalized = new System.Text.StringBuilder(text.Length);
+        for (int index = 0; index < text.Length; index++)
+        {
+            if ((index & 0xFFF) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+            if (text[index] != '\r')
+            {
+                normalized.Append(text[index]);
+                continue;
+            }
+
+            normalized.Append('\n');
+            if (index + 1 < text.Length && text[index + 1] == '\n')
+                index++;
+        }
 
         return normalized.ToString();
     }

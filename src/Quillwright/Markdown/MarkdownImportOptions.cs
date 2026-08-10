@@ -33,6 +33,12 @@ public enum MarkdownImportWarningKind : byte
 
     /// <summary>Raw HTML has no interpreter here and was kept as the text it is.</summary>
     HtmlKeptAsText,
+
+    /// <summary>A GitHub footnote definition or reference was malformed or duplicated.</summary>
+    FootnoteMalformed,
+
+    /// <summary>A GitHub footnote reference or definition has no matching counterpart.</summary>
+    FootnoteDangling,
 }
 
 /// <summary>One compromise made while importing, with the line it was made on.</summary>

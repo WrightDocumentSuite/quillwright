@@ -58,6 +58,108 @@ public class MarkdownImportTests
     }
 
     [Fact]
+    public void ManyUnmatchedEmphasisClosers_RemainLiteral()
+    {
+        const int Count = 20_000;
+        string markdown = string.Concat(Enumerable.Repeat("a* ", Count));
+
+        Paragraph paragraph = MarkdownImporter.Import(markdown).Document.Paragraphs.Single();
+
+        Assert.Equal(markdown.TrimEnd(), paragraph.GetText());
+        Assert.All(paragraph.Runs, static run =>
+        {
+            Assert.NotEqual(true, run.Format.Bold);
+            Assert.NotEqual(true, run.Format.Italic);
+            Assert.NotEqual(true, run.Format.Strike);
+        });
+    }
+
+    [Fact]
+    public void NestedAndAdjacentDelimiterKinds_KeepTheirFormattingScopes()
+    {
+        Paragraph paragraph = MarkdownImporter.Import(
+            "**bold *both* tail** _*adjacent*_ ~~strike **both-two** tail~~").Document.Paragraphs.Single();
+
+        Run both = paragraph.Runs.Single(static run => run.Text == "both");
+        Assert.True(both.Format.Bold);
+        Assert.True(both.Format.Italic);
+
+        Run adjacent = paragraph.Runs.Single(static run => run.Text == "adjacent");
+        Assert.True(adjacent.Format.Italic);
+        Assert.NotEqual(true, adjacent.Format.Bold);
+
+        Run bothTwo = paragraph.Runs.Single(static run => run.Text == "both-two");
+        Assert.True(bothTwo.Format.Bold);
+        Assert.True(bothTwo.Format.Strike);
+        Assert.NotEqual(true, bothTwo.Format.Italic);
+    }
+
+    [Fact]
+    public void RuleOfThree_PreservesLiteralInteriorMarkers()
+    {
+        Paragraph paragraph = MarkdownImporter.Import("*foo**bar*").Document.Paragraphs.Single();
+
+        Assert.Equal("foo**bar", paragraph.GetText());
+        Assert.All(paragraph.Runs, static run =>
+        {
+            Assert.True(run.Format.Italic);
+            Assert.NotEqual(true, run.Format.Bold);
+        });
+    }
+
+    [Fact]
+    public void RuleOfThree_KeepsStrongEmphasisInsideEmphasis()
+    {
+        Paragraph paragraph = MarkdownImporter.Import("*foo**bar**baz* *foo**qux***")
+            .Document.Paragraphs.Single();
+
+        Assert.Equal("foobarbaz fooqux", paragraph.GetText());
+        foreach (Run run in paragraph.Runs.Where(static candidate => candidate.Text is "foo" or "baz"))
+        {
+            Assert.True(run.Format.Italic);
+            Assert.NotEqual(true, run.Format.Bold);
+        }
+        Assert.Equal(3, paragraph.Runs.Count(static candidate => candidate.Text is "foo" or "baz"));
+
+        foreach (string text in new[] { "bar", "qux" })
+        {
+            Run run = paragraph.Runs.Single(candidate => candidate.Text == text);
+            Assert.True(run.Format.Italic);
+            Assert.True(run.Format.Bold);
+        }
+    }
+
+    [Fact]
+    public void RuleOfThree_AppliesToUnderscoresButAllowsTwoTripleRuns()
+    {
+        Paragraph disallowed = MarkdownImporter.Import("_foo(__)bar_").Document.Paragraphs.Single();
+        Paragraph triples = MarkdownImporter.Import("foo***bar***baz").Document.Paragraphs.Single();
+
+        Assert.Equal("foo(__)bar", disallowed.GetText());
+        Assert.All(disallowed.Runs, static run =>
+        {
+            Assert.True(run.Format.Italic);
+            Assert.NotEqual(true, run.Format.Bold);
+        });
+        Run bar = triples.Runs.Single(static run => run.Text == "bar");
+        Assert.True(bar.Format.Italic);
+        Assert.True(bar.Format.Bold);
+    }
+
+    [Fact]
+    public void RuleOfThree_SkipsInadmissibleOpenersWithoutQuadraticRescan()
+    {
+        const int Count = 10_000;
+        string markdown = string.Concat(Enumerable.Repeat("**a ", Count)) +
+                          string.Concat(Enumerable.Repeat("b*c* ", Count));
+
+        Paragraph paragraph = MarkdownImporter.Import(markdown).Document.Paragraphs.Single();
+
+        Assert.StartsWith("**a **a ", paragraph.GetText(), StringComparison.Ordinal);
+        Assert.Equal(Count, paragraph.Runs.Count(static run => run.Text == "c" && run.Format.Italic == true));
+    }
+
+    [Fact]
     public void ACodeSpan_IsMonospaceAndLiteral()
     {
         WordDocument document = MarkdownImporter.Import("Call `map(*x*)` now.").Document;
@@ -86,6 +188,32 @@ public class MarkdownImportTests
 
         (int start, int length, _) = paragraph.Ranges.First(r => r.Range == links[0]);
         Assert.Equal("the spec", paragraph.Text.Substring(start, length));
+    }
+
+    [Fact]
+    public void ManyUnterminatedAutolinkCandidates_RemainLiteral()
+    {
+        const int Count = 30_000;
+        string markdown = string.Concat(Enumerable.Repeat("<a ", Count)) + "tail";
+
+        MarkdownImportResult result = MarkdownImporter.Import(markdown);
+
+        Paragraph paragraph = result.Document.Paragraphs.Single();
+        Assert.Equal(markdown, paragraph.GetText());
+        Assert.Empty(paragraph.Ranges.Select(static range => range.Range).OfType<Hyperlink>());
+        Assert.True(result.Diagnostics.IsEmpty, result.Diagnostics.ToString());
+    }
+
+    [Fact]
+    public void AShorterFenceInsideCode_DoesNotExposeALinkDefinition()
+    {
+        WordDocument document = MarkdownImporter.Import(
+            "````\n```\n[inside]: https://example.org\n```\n````\n\n[inside]").Document;
+
+        List<Paragraph> paragraphs = [.. document.Paragraphs];
+        Assert.Contains("[inside]: https://example.org", paragraphs[0].GetText(), StringComparison.Ordinal);
+        Assert.Equal("[inside]", paragraphs[1].GetText());
+        Assert.Empty(paragraphs[1].Ranges.Select(static range => range.Range).OfType<Hyperlink>());
     }
 
     [Fact]
@@ -192,9 +320,10 @@ public class MarkdownImportTests
     [Fact]
     public void EscapesAndEntities_AreLiteral()
     {
-        WordDocument document = MarkdownImporter.Import("\\*not emphasis\\* &amp; ties &#8212; here").Document;
+        WordDocument document = MarkdownImporter.Import(
+            "\\*not emphasis\\* &amp; ties &#8212; here; invalid: &#0; &#xD800; &#x110000;").Document;
 
-        Assert.Equal("*not emphasis* & ties — here", document.Paragraphs.Single().Text);
+        Assert.Equal("*not emphasis* & ties — here; invalid: � � �", document.Paragraphs.Single().Text);
     }
 
     [Fact]

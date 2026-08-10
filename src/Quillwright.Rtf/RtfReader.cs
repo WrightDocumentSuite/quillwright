@@ -10,7 +10,7 @@ public static class RtfReader
     /// <param name="content">Complete RTF content, including its root group.</param>
     /// <param name="options">Resource limits and optional content.</param>
     public static RtfImportResult Load(ReadOnlySpan<byte> content, RtfImportOptions? options = null) =>
-        new RtfParser(options ?? RtfImportOptions.Default).Parse(content);
+        new RtfParser(options ?? RtfImportOptions.Default, CancellationToken.None).Parse(content);
 
     /// <summary>Imports an RTF file.</summary>
     /// <param name="path">Path to the RTF file.</param>
@@ -58,6 +58,7 @@ public static class RtfReader
                 (int)Math.Min(exception.Observed, int.MaxValue));
         }
 
-        return Load(content, settings);
+        cancellationToken.ThrowIfCancellationRequested();
+        return new RtfParser(settings, cancellationToken).Parse(content);
     }
 }

@@ -29,6 +29,7 @@ internal sealed class HtmlTokenizer
 
     private readonly string _input;
     private readonly Func<bool> _canStartCdata;
+    private readonly CancellationToken _cancellationToken;
     private readonly StringBuilder _text = new();
     private readonly Queue<HtmlToken> _output = new();
     private readonly StringBuilder _temporary = new();
@@ -55,7 +56,12 @@ internal sealed class HtmlTokenizer
     private int _characterReferenceCode;
 
     internal HtmlTokenizer(string input, Func<bool> canStartCdata)
-        : this(input, canStartCdata, StringComparer.Ordinal)
+        : this(input, canStartCdata, StringComparer.Ordinal, CancellationToken.None)
+    {
+    }
+
+    internal HtmlTokenizer(string input, Func<bool> canStartCdata, CancellationToken cancellationToken)
+        : this(input, canStartCdata, StringComparer.Ordinal, cancellationToken)
     {
     }
 
@@ -64,8 +70,18 @@ internal sealed class HtmlTokenizer
         string input,
         Func<bool> canStartCdata,
         IEqualityComparer<string> attributeNameComparer)
+        : this(input, canStartCdata, attributeNameComparer, CancellationToken.None)
     {
-        _input = Preprocess(input);
+    }
+
+    private HtmlTokenizer(
+        string input,
+        Func<bool> canStartCdata,
+        IEqualityComparer<string> attributeNameComparer,
+        CancellationToken cancellationToken)
+    {
+        _cancellationToken = cancellationToken;
+        _input = Preprocess(input, cancellationToken);
         _canStartCdata = canStartCdata;
         _attributeNames = new HashSet<string>(attributeNameComparer);
     }
@@ -181,7 +197,10 @@ internal sealed class HtmlTokenizer
     public HtmlToken Next()
     {
         while (_output.Count == 0)
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
             Step();
+        }
 
         return _output.Dequeue();
     }
@@ -190,7 +209,7 @@ internal sealed class HtmlTokenizer
     /// The input as the standard requires it: carriage returns folded into line feeds, alone
     /// or in a pair (§13.2.3.5).
     /// </summary>
-    private static string Preprocess(string input)
+    private static string Preprocess(string input, CancellationToken cancellationToken)
     {
         if (input.IndexOf('\r') < 0)
             return input;
@@ -198,6 +217,8 @@ internal sealed class HtmlTokenizer
         var normalized = new StringBuilder(input.Length);
         for (int i = 0; i < input.Length; i++)
         {
+            if ((i & 0xFFF) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
             if (input[i] != '\r')
             {
                 normalized.Append(input[i]);
@@ -218,6 +239,8 @@ internal sealed class HtmlTokenizer
 
     private char Consume()
     {
+        if ((_position & 0xFFF) == 0)
+            _cancellationToken.ThrowIfCancellationRequested();
         char c = _input[_position++];
         if (c == '\n')
             _line++;

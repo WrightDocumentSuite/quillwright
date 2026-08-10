@@ -20,17 +20,26 @@ internal sealed class MarkdownInlineParser
 {
     private readonly IReadOnlyDictionary<string, (string Url, string? Title)> _definitions;
     private readonly Func<string, string?, int, ImageData?> _resolveImage;
+    private readonly Func<Paragraph, string?, string, int, bool> _appendNoteReference;
+    private readonly Action<string, int> _reportRawHtml;
     private readonly DocumentLoadBudgetState _budget;
+    private readonly CancellationToken _cancellationToken;
     private int _parseDepth;
 
     internal MarkdownInlineParser(
         IReadOnlyDictionary<string, (string Url, string? Title)> definitions,
         Func<string, string?, int, ImageData?> resolveImage,
-        DocumentLoadBudgetState budget)
+        Func<Paragraph, string?, string, int, bool> appendNoteReference,
+        Action<string, int> reportRawHtml,
+        DocumentLoadBudgetState budget,
+        CancellationToken cancellationToken)
     {
         _definitions = definitions;
         _resolveImage = resolveImage;
+        _appendNoteReference = appendNoteReference;
+        _reportRawHtml = reportRawHtml;
         _budget = budget;
+        _cancellationToken = cancellationToken;
     }
 
     /// <summary>Parses inline text into a paragraph.</summary>
@@ -102,9 +111,23 @@ internal sealed class MarkdownInlineParser
         public string? Title { get; } = title;
     }
 
+    private sealed class FootnoteNode(string raw, string? label) : Node
+    {
+        public string Raw { get; } = raw;
+
+        public string? Label { get; } = label;
+    }
+
+    private sealed class RawHtmlNode(string text) : Node
+    {
+        public string Text { get; } = text;
+    }
+
     private sealed class DelimNode(char kind, int count, bool canOpen, bool canClose) : Node
     {
         public char Kind { get; } = kind;
+
+        public int OriginalCount { get; } = count;
 
         public int Count { get; set; } = count;
 
@@ -112,6 +135,8 @@ internal sealed class MarkdownInlineParser
 
         public bool CanClose { get; } = canClose;
     }
+
+    private readonly record struct OpenerEntry(LinkedListNode<Node> Item, long Order);
 
     private List<Node> ParseNodes(string text)
     {
@@ -121,106 +146,124 @@ internal sealed class MarkdownInlineParser
         {
             var nodes = new List<Node>();
             var literal = new StringBuilder();
+            HtmlTermini htmlTermini = ComputeHtmlTermini(text);
             int i = 0;
 
-        void FlushLiteral()
-        {
-            if (literal.Length > 0)
+            void FlushLiteral()
             {
-                AddNode(nodes, new TextNode(literal.ToString()));
-                literal.Clear();
+                if (literal.Length > 0)
+                {
+                    AddNode(nodes, new TextNode(literal.ToString()));
+                    literal.Clear();
+                }
             }
-        }
 
-        while (i < text.Length)
-        {
-            char c = text[i];
-            switch (c)
+            while (i < text.Length)
             {
-                case '\\' when i + 1 < text.Length && IsAsciiPunctuation(text[i + 1]):
-                    literal.Append(text[i + 1]);
-                    i += 2;
-                    continue;
-
-                case '\n':
-                    FlushLiteral();
-                    AddNode(nodes, new BreakNode());
-                    i++;
-                    continue;
-
-                case '`':
+                if ((i & 1023) == 0)
+                    _cancellationToken.ThrowIfCancellationRequested();
+                char c = text[i];
+                switch (c)
                 {
-                    int open = CountRun(text, i, '`');
-                    int close = FindBacktickClose(text, i + open, open);
-                    if (close < 0)
-                    {
-                        literal.Append(text, i, open);
-                        i += open;
+                    case '\\' when i + 1 < text.Length && IsAsciiPunctuation(text[i + 1]):
+                        literal.Append(text[i + 1]);
+                        i += 2;
                         continue;
-                    }
 
-                    FlushLiteral();
-                    AddNode(nodes, new CodeNode(CodeContent(text[(i + open)..close])));
-                    i = close + open;
-                    continue;
-                }
+                    case '\n':
+                        FlushLiteral();
+                        AddNode(nodes, new BreakNode());
+                        i++;
+                        continue;
 
-                case '<' when Autolink(text, i) is { } autolink:
-                    FlushLiteral();
-                    _budget.AddMarkupNode(); // the link's text child
-                    AddNode(nodes, new LinkNode([new TextNode(autolink.Text)], autolink.Url, null));
-                    i = autolink.End;
-                    continue;
+                    case '`':
+                        {
+                            int open = CountRun(text, i, '`');
+                            int close = FindBacktickClose(text, i + open, open);
+                            if (close < 0)
+                            {
+                                literal.Append(text, i, open);
+                                i += open;
+                                continue;
+                            }
 
-                case '&' when Entity(text, i) is { } entity:
-                    literal.Append(entity.Value);
-                    i = entity.End;
-                    continue;
+                            FlushLiteral();
+                            AddNode(nodes, new CodeNode(CodeContent(text[(i + open)..close])));
+                            i = close + open;
+                            continue;
+                        }
 
-                case '*' or '_':
-                {
-                    int count = CountRun(text, i, c);
-                    (bool open, bool close) = Flanking(text, i, count, c);
-                    FlushLiteral();
-                    AddNode(nodes, new DelimNode(c, count, open, close));
-                    i += count;
-                    continue;
-                }
+                    case '<' when Autolink(text, i) is { } autolink:
+                        FlushLiteral();
+                        _budget.AddMarkupNode(); // the link's text child
+                        AddNode(nodes, new LinkNode([new TextNode(autolink.Text)], autolink.Url, null));
+                        i = autolink.End;
+                        continue;
 
-                case '~' when CountRun(text, i, '~') >= 2:
-                {
-                    int count = CountRun(text, i, '~');
-                    (bool open, bool close) = Flanking(text, i, count, '~');
-                    FlushLiteral();
-                    AddNode(nodes, new DelimNode('~', count, open, close));
-                    i += count;
-                    continue;
-                }
+                    case '<' when RawHtml(text, i, htmlTermini) is { } html:
+                        FlushLiteral();
+                        AddNode(nodes, new RawHtmlNode(html.Text));
+                        i = html.End;
+                        continue;
 
-                case '!' when i + 1 < text.Length && text[i + 1] == '[':
-                case '[':
-                {
-                    bool image = c == '!';
-                    int start = image ? i + 1 : i;
-                    if (ParseBracket(text, start, image) is not { } parsed)
-                    {
+                    case '&' when Entity(text, i) is { } entity:
+                        literal.Append(entity.Value);
+                        i = entity.End;
+                        continue;
+
+                    case '*' or '_':
+                        {
+                            int count = CountRun(text, i, c);
+                            (bool open, bool close) = Flanking(text, i, count, c);
+                            FlushLiteral();
+                            AddNode(nodes, new DelimNode(c, count, open, close));
+                            i += count;
+                            continue;
+                        }
+
+                    case '~' when CountRun(text, i, '~') >= 2:
+                        {
+                            int count = CountRun(text, i, '~');
+                            (bool open, bool close) = Flanking(text, i, count, '~');
+                            FlushLiteral();
+                            AddNode(nodes, new DelimNode('~', count, open, close));
+                            i += count;
+                            continue;
+                        }
+
+                    case '[' when i + 1 < text.Length && text[i + 1] == '^':
+                        {
+                            (string raw, string? label, int end) = Footnote(text, i);
+                            FlushLiteral();
+                            AddNode(nodes, new FootnoteNode(raw, label));
+                            i = end;
+                            continue;
+                        }
+
+                    case '!' when i + 1 < text.Length && text[i + 1] == '[':
+                    case '[':
+                        {
+                            bool image = c == '!';
+                            int start = image ? i + 1 : i;
+                            if (ParseBracket(text, start, image) is not { } parsed)
+                            {
+                                literal.Append(c);
+                                i++;
+                                continue;
+                            }
+
+                            FlushLiteral();
+                            AddNode(nodes, parsed.Node);
+                            i = parsed.End;
+                            continue;
+                        }
+
+                    default:
                         literal.Append(c);
                         i++;
                         continue;
-                    }
-
-                    FlushLiteral();
-                    AddNode(nodes, parsed.Node);
-                    i = parsed.End;
-                    continue;
                 }
-
-                default:
-                    literal.Append(c);
-                    i++;
-                    continue;
             }
-        }
 
             FlushLiteral();
             return nodes;
@@ -388,28 +431,196 @@ internal sealed class MarkdownInlineParser
         return (url.ToString(), title, i + 1);
     }
 
-    private static (string Text, string Url, int End)? Autolink(string text, int at)
+    private (string Text, string Url, int End)? Autolink(string text, int at)
     {
-        int end = text.IndexOf('>', at + 1);
-        if (end < 0)
-            return null;
-
-        string inner = text[(at + 1)..end];
-        if (inner.Length == 0 || inner.Any(static c => c is ' ' or '<'))
-            return null;
-
-        int colon = inner.IndexOf(':', StringComparison.Ordinal);
-        if (colon > 0 && char.IsAsciiLetter(inner[0]) &&
-            inner.AsSpan(0, colon).ToArray().All(static c => char.IsAsciiLetterOrDigit(c) || c is '+' or '.' or '-'))
+        int colon = -1;
+        int atSign = -1;
+        int dotAfterAt = -1;
+        bool schemeCharacters = true;
+        int end = at + 1;
+        for (; end < text.Length && text[end] != '>'; end++)
         {
-            return (inner, inner, end + 1);
+            if (((end - at) & 4095) == 0)
+                _cancellationToken.ThrowIfCancellationRequested();
+
+            char current = text[end];
+            if (current is ' ' or '<')
+                return null;
+
+            int relative = end - at - 1;
+            if (colon < 0)
+            {
+                if (current == ':')
+                    colon = relative;
+                else if (!char.IsAsciiLetterOrDigit(current) && current is not ('+' or '.' or '-'))
+                    schemeCharacters = false;
+            }
+
+            if (atSign < 0 && current == '@')
+                atSign = relative;
+            else if (atSign >= 0 && dotAfterAt < 0 && current == '.')
+                dotAfterAt = relative;
         }
 
-        int atSign = inner.IndexOf('@', StringComparison.Ordinal);
-        if (atSign > 0 && inner.IndexOf('.', atSign) > atSign)
-            return (inner, "mailto:" + inner, end + 1);
+        if (end >= text.Length || end == at + 1)
+            return null;
+
+        ReadOnlySpan<char> inner = text.AsSpan(at + 1, end - at - 1);
+        if (colon > 0 && char.IsAsciiLetter(inner[0]) && schemeCharacters)
+        {
+            string value = inner.ToString();
+            return (value, value, end + 1);
+        }
+
+        if (atSign > 0 && dotAfterAt > atSign)
+        {
+            string value = inner.ToString();
+            return (value, "mailto:" + value, end + 1);
+        }
 
         return null;
+    }
+
+    private static (string Raw, string? Label, int End) Footnote(string text, int at)
+    {
+        int close = text.IndexOf(']', at + 2);
+        if (close < 0)
+            return (text[at..], null, text.Length);
+
+        string raw = text[at..(close + 1)];
+        string label = text[(at + 2)..close];
+        if (label.Length == 0 || label.Contains('\n'))
+            return (raw, null, close + 1);
+
+        return (raw, label, close + 1);
+    }
+
+    /// <summary>
+    /// Recognises CommonMark-shaped inline HTML only far enough to keep it as literal text and
+    /// issue a diagnostic. It intentionally does not interpret elements or attributes.
+    /// </summary>
+    private readonly record struct HtmlTermini(int Comment, int Processing, int CData, int Declaration);
+
+    private HtmlTermini ComputeHtmlTermini(string text)
+    {
+        _cancellationToken.ThrowIfCancellationRequested();
+        int comment = -1;
+        int processing = -1;
+        int cdata = -1;
+        int declaration = -1;
+        for (int i = 0; i < text.Length; i++)
+        {
+            if ((i & 4095) == 0)
+                _cancellationToken.ThrowIfCancellationRequested();
+            if (text[i] != '>')
+                continue;
+
+            declaration = i;
+            if (i >= 2 && text[i - 2] == '-' && text[i - 1] == '-')
+                comment = i - 2;
+            if (i >= 1 && text[i - 1] == '?')
+                processing = i - 1;
+            if (i >= 2 && text[i - 2] == ']' && text[i - 1] == ']')
+                cdata = i - 2;
+        }
+
+        return new HtmlTermini(comment, processing, cdata, declaration);
+    }
+
+    private static (string Text, int End)? RawHtml(string text, int at, HtmlTermini termini)
+    {
+        if (text.AsSpan(at).StartsWith("<!--", StringComparison.Ordinal))
+            return Delimited(text, at, "-->", termini.Comment);
+        if (text.AsSpan(at).StartsWith("<?", StringComparison.Ordinal))
+            return Delimited(text, at, "?>", termini.Processing);
+        if (text.AsSpan(at).StartsWith("<![CDATA[", StringComparison.Ordinal))
+            return Delimited(text, at, "]]>", termini.CData);
+
+        if (text.AsSpan(at).StartsWith("<!", StringComparison.Ordinal) &&
+            at + 2 < text.Length && char.IsAsciiLetter(text[at + 2]))
+        {
+            return Delimited(text, at, ">", termini.Declaration);
+        }
+
+        int i = at + 1;
+        bool closing = i < text.Length && text[i] == '/';
+        if (closing)
+            i++;
+        if (i >= text.Length || !char.IsAsciiLetter(text[i]))
+            return null;
+
+        i++;
+        while (i < text.Length && (char.IsAsciiLetterOrDigit(text[i]) || text[i] is '-' or '_'))
+            i++;
+
+        if (closing)
+        {
+            while (i < text.Length && text[i] is ' ' or '\t' or '\n')
+                i++;
+            return i < text.Length && text[i] == '>' ? (text[at..(i + 1)], i + 1) : null;
+        }
+
+        while (i < text.Length)
+        {
+            while (i < text.Length && text[i] is ' ' or '\t' or '\n')
+                i++;
+            if (i >= text.Length)
+                return null;
+            if (text[i] == '>')
+                return (text[at..(i + 1)], i + 1);
+            if (text[i] == '/' && i + 1 < text.Length && text[i + 1] == '>')
+                return (text[at..(i + 2)], i + 2);
+
+            int nameStart = i;
+            while (i < text.Length &&
+                   text[i] is not (' ' or '\t' or '\n' or '=' or '/' or '>' or '<' or '"' or '\'' or '`'))
+            {
+                i++;
+            }
+
+            if (i == nameStart)
+                return null;
+            while (i < text.Length && text[i] is ' ' or '\t' or '\n')
+                i++;
+            if (i >= text.Length || text[i] != '=')
+                continue;
+
+            i++;
+            while (i < text.Length && text[i] is ' ' or '\t' or '\n')
+                i++;
+            if (i >= text.Length)
+                return null;
+            if (text[i] is '"' or '\'')
+            {
+                char quote = text[i++];
+                int close = text.IndexOf(quote, i);
+                if (close < 0)
+                    return null;
+                i = close + 1;
+                continue;
+            }
+
+            int valueStart = i;
+            while (i < text.Length && text[i] is not (' ' or '\t' or '\n' or '"' or '\'' or '=' or '<' or '>' or '`'))
+                i++;
+            if (i == valueStart)
+                return null;
+        }
+
+        return null;
+    }
+
+    private static (string Text, int End)? Delimited(
+        string text, int at, string delimiter, int lastDelimiter)
+    {
+        // A failed search at one candidate proves every later candidate is unterminated too.
+        // The precomputed last terminus keeps adversarial "<!--<!--..." input linear while
+        // letting invalid HTML fall back to ordinary CommonMark inline parsing.
+        if (lastDelimiter < at)
+            return null;
+
+        int end = text.IndexOf(delimiter, at + 2, StringComparison.Ordinal);
+        return end < 0 ? null : (text[at..(end + delimiter.Length)], end + delimiter.Length);
     }
 
     private static (string Value, int End)? Entity(string text, int at)
@@ -420,17 +631,17 @@ internal sealed class MarkdownInlineParser
 
         string name = text[(at + 1)..end];
         if (name.StartsWith("#x", StringComparison.OrdinalIgnoreCase) &&
-            int.TryParse(name.AsSpan(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int hex) &&
-            hex is > 0 and <= 0x10FFFF)
+            name.Length is >= 3 and <= 8 &&
+            int.TryParse(name.AsSpan(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int hex))
         {
-            return (char.ConvertFromUtf32(hex), end + 1);
+            return (CodePoint(hex), end + 1);
         }
 
         if (name.StartsWith('#') &&
-            int.TryParse(name.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out int code) &&
-            code is > 0 and <= 0x10FFFF)
+            name.Length is >= 2 and <= 8 &&
+            int.TryParse(name.AsSpan(1), NumberStyles.None, CultureInfo.InvariantCulture, out int code))
         {
-            return (char.ConvertFromUtf32(code), end + 1);
+            return (CodePoint(code), end + 1);
         }
 
         return name switch
@@ -448,6 +659,11 @@ internal sealed class MarkdownInlineParser
             _ => null,
         };
     }
+
+    private static string CodePoint(int value) =>
+        value is <= 0 or > 0x10FFFF or (>= 0xD800 and <= 0xDFFF)
+            ? "\uFFFD"
+            : char.ConvertFromUtf32(value);
 
     private static int CountRun(string text, int at, char c)
     {
@@ -511,76 +727,179 @@ internal sealed class MarkdownInlineParser
         c is (>= '!' and <= '/') or (>= ':' and <= '@') or (>= '[' and <= '`') or (>= '{' and <= '~');
 
     /// <summary>
-    /// Pairs delimiter runs into emphasis, strong emphasis and strikethrough, closers left to
-    /// right against the nearest matching opener, shedding two markers a time while they last.
+    /// Pairs delimiter runs into emphasis, strong emphasis and strikethrough. A linked work list
+    /// and one opener stack per delimiter kind keep both lookup and splicing amortized linear.
     /// </summary>
     private void ProcessEmphasis(List<Node> nodes, int depth = 1)
     {
+        _cancellationToken.ThrowIfCancellationRequested();
         _budget.EnsureMarkupDepth(depth);
-        for (int closer = 0; closer < nodes.Count; closer++)
-        {
-            if (nodes[closer] is not DelimNode closing || !closing.CanClose)
-                continue;
+        var work = new LinkedList<Node>(nodes);
+        Stack<OpenerEntry>[] starOpeners = CreateOpenerBuckets();
+        Stack<OpenerEntry>[] underscoreOpeners = CreateOpenerBuckets();
+        Stack<OpenerEntry>[] strikeOpeners = CreateOpenerBuckets();
+        int operations = 0;
+        long openerOrder = 0;
 
-            int opener = -1;
-            for (int i = closer - 1; i >= 0; i--)
+        void CheckCancellation()
+        {
+            if ((++operations & 4095) == 0)
+                _cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        Stack<OpenerEntry>[] Openers(char kind) => kind switch
+        {
+            '*' => starOpeners,
+            '_' => underscoreOpeners,
+            _ => strikeOpeners,
+        };
+
+        (OpenerEntry Entry, int Bucket)? NearestAdmissibleOpener(
+            DelimNode closer,
+            Stack<OpenerEntry>[] buckets)
+        {
+            OpenerEntry? nearest = null;
+            int nearestBucket = -1;
+            for (int bucket = 0; bucket < buckets.Length; bucket++)
             {
-                if (nodes[i] is DelimNode candidate && candidate.CanOpen && candidate.Kind == closing.Kind && candidate.Count > 0)
+                CheckCancellation();
+                bool openerCanClose = bucket >= 3;
+                int openerRemainder = bucket % 3;
+                if (ViolatesRuleOfThree(closer, openerCanClose, openerRemainder))
+                    continue;
+
+                Stack<OpenerEntry> candidates = buckets[bucket];
+                while (candidates.Count > 0 &&
+                       (candidates.Peek().Item.List != work ||
+                        (closer.Kind == '~' &&
+                         ((DelimNode)candidates.Peek().Item.Value).Count < 2)))
                 {
-                    opener = i;
-                    break;
+                    CheckCancellation();
+                    candidates.Pop();
+                }
+
+                if (candidates.Count > 0 &&
+                    (nearest is null || candidates.Peek().Order > nearest.Value.Order))
+                {
+                    nearest = candidates.Peek();
+                    nearestBucket = bucket;
                 }
             }
 
-            if (opener < 0)
-                continue;
+            return nearest is null ? null : (nearest.Value, nearestBucket);
+        }
 
-            var opening = (DelimNode)nodes[opener];
-            bool strike = closing.Kind == '~';
-            int used = strike ? 2 : Math.Min(Math.Min(opening.Count, closing.Count), 2);
-
-            var children = new List<Node>(nodes.GetRange(opener + 1, closer - opener - 1));
-            _budget.AddMarkupNode();
-            var span = new SpanNode(children)
+        for (LinkedListNode<Node>? item = work.First; item is not null;)
+        {
+            CheckCancellation();
+            LinkedListNode<Node>? next = item.Next;
+            if (item.Value is not DelimNode delimiter)
             {
-                Bold = !strike && used == 2,
-                Italic = !strike && used == 1,
-                Strike = strike,
-            };
+                item = next;
+                continue;
+            }
 
-            nodes.RemoveRange(opener + 1, closer - opener - 1);
-            nodes.Insert(opener + 1, span);
+            Stack<OpenerEntry>[] openers = Openers(delimiter.Kind);
+            if (delimiter.CanClose)
+            {
+                while (item.List is not null && delimiter.Count > 0 &&
+                       (delimiter.Kind != '~' || delimiter.Count >= 2))
+                {
+                    CheckCancellation();
+                    if (NearestAdmissibleOpener(delimiter, openers) is not { } match)
+                        break;
 
-            opening.Count -= used;
-            closing.Count -= used;
-            if (opening.Count <= 0)
-                nodes.RemoveAt(opener);
+                    LinkedListNode<Node> openerItem = match.Entry.Item;
+                    var opening = (DelimNode)openerItem.Value;
+                    bool strike = delimiter.Kind == '~';
+                    int used = strike ? 2 : Math.Min(Math.Min(opening.Count, delimiter.Count), 2);
 
-            int closingIndex = nodes.IndexOf(closing);
-            if (closing.Count <= 0 && closingIndex >= 0)
-                nodes.RemoveAt(closingIndex);
+                    var children = new List<Node>();
+                    for (LinkedListNode<Node>? child = openerItem.Next; child != item;)
+                    {
+                        CheckCancellation();
+                        LinkedListNode<Node> following = child!.Next!;
+                        children.Add(child.Value);
+                        work.Remove(child);
+                        child = following;
+                    }
 
-            // Something between the two may still pair; start the scan again from the span.
-            closer = opener;
+                    _budget.AddMarkupNode();
+                    var span = new SpanNode(children)
+                    {
+                        Bold = !strike && used == 2,
+                        Italic = !strike && used == 1,
+                        Strike = strike,
+                    };
+                    work.AddAfter(openerItem, span);
+
+                    opening.Count -= used;
+                    delimiter.Count -= used;
+                    if (opening.Count <= 0)
+                    {
+                        openers[match.Bucket].Pop();
+                        work.Remove(openerItem);
+                    }
+
+                    if (delimiter.Count <= 0)
+                        work.Remove(item);
+                }
+            }
+
+            if (item.List is not null && delimiter.Count > 0 && delimiter.CanOpen &&
+                (delimiter.Kind != '~' || delimiter.Count >= 2))
+            {
+                int bucket = (delimiter.CanClose ? 3 : 0) + delimiter.OriginalCount % 3;
+                openers[bucket].Push(new OpenerEntry(item, openerOrder++));
+            }
+
+            item = next;
         }
 
         // Whatever is left never paired and is the literal characters it always was.
-        for (int i = 0; i < nodes.Count; i++)
+        nodes.Clear();
+        for (LinkedListNode<Node>? item = work.First; item is not null; item = item.Next)
         {
-            if (nodes[i] is DelimNode leftover)
+            CheckCancellation();
+            Node node = item.Value;
+            if (node is DelimNode leftover)
             {
                 _budget.AddMarkupNode();
-                nodes[i] = new TextNode(new string(leftover.Kind, leftover.Count));
+                node = new TextNode(new string(leftover.Kind, leftover.Count));
             }
-            else if (nodes[i] is SpanNode span)
+
+            nodes.Add(node);
+            if (node is SpanNode span)
                 ProcessEmphasis(span.Children, depth + 1);
-            else if (nodes[i] is LinkNode link)
+            else if (node is LinkNode link)
                 ProcessEmphasis(link.Children, depth + 1);
         }
     }
 
+    private static Stack<OpenerEntry>[] CreateOpenerBuckets() =>
+        [new(), new(), new(), new(), new(), new()];
+
+    /// <summary>
+    /// CommonMark rules 9 and 10 forbid a match when either run can play both roles and the
+    /// original run lengths form the rule-of-three combination. Bucketing openers by this
+    /// immutable state lets the matcher skip an inadmissible nearest opener without rescanning.
+    /// </summary>
+    private static bool ViolatesRuleOfThree(
+        DelimNode closer,
+        bool openerCanClose,
+        int openerRemainder)
+    {
+        if (closer.Kind is not ('*' or '_') || (!closer.CanOpen && !openerCanClose))
+            return false;
+
+        int closerRemainder = closer.OriginalCount % 3;
+        return (openerRemainder + closerRemainder) % 3 == 0 &&
+               (openerRemainder != 0 || closerRemainder != 0);
+    }
+
     private void Emit(Paragraph paragraph, List<Node> nodes, RunFormat format, int line, int depth = 1)
     {
+        _cancellationToken.ThrowIfCancellationRequested();
         _budget.EnsureMarkupDepth(depth);
         foreach (Node node in nodes)
         {
@@ -612,29 +931,39 @@ internal sealed class MarkdownInlineParser
                     break;
 
                 case LinkNode link:
-                {
-                    int start = paragraph.TextLength;
-                    Emit(paragraph, link.Children, format, line, depth + 1);
-                    var hyperlink = new Hyperlink { Tooltip = link.Title };
-                    if (link.Url.StartsWith('#'))
-                        hyperlink.Anchor = link.Url[1..];
-                    else
-                        hyperlink.Url = link.Url;
+                    {
+                        int start = paragraph.TextLength;
+                        Emit(paragraph, link.Children, format, line, depth + 1);
+                        var hyperlink = new Hyperlink { Tooltip = link.Title };
+                        if (link.Url.StartsWith('#'))
+                            hyperlink.Anchor = link.Url[1..];
+                        else
+                            hyperlink.Url = link.Url;
 
-                    paragraph.AddRange(hyperlink, start, paragraph.TextLength - start);
-                    break;
-                }
+                        paragraph.AddRange(hyperlink, start, paragraph.TextLength - start);
+                        break;
+                    }
 
                 case ImageNode image:
-                {
-                    ImageData? data = _resolveImage(image.Url, image.Alt, line);
-                    if (data is not null)
-                        paragraph.AppendPicture(data);
-                    else if (image.Alt.Length > 0)
-                        paragraph.AppendText(image.Alt, format);
+                    {
+                        ImageData? data = _resolveImage(image.Url, image.Alt, line);
+                        if (data is not null)
+                            paragraph.AppendPicture(data);
+                        else if (image.Alt.Length > 0)
+                            paragraph.AppendText(image.Alt, format);
 
+                        break;
+                    }
+
+                case FootnoteNode footnote:
+                    if (!_appendNoteReference(paragraph, footnote.Label, footnote.Raw, line))
+                        paragraph.AppendText(footnote.Raw, format);
                     break;
-                }
+
+                case RawHtmlNode html:
+                    _reportRawHtml(html.Text, line);
+                    paragraph.AppendText(html.Text, format);
+                    break;
 
                 default:
                     break;
@@ -644,6 +973,7 @@ internal sealed class MarkdownInlineParser
 
     private void Flatten(List<Node> nodes, StringBuilder plain, int depth = 1)
     {
+        _cancellationToken.ThrowIfCancellationRequested();
         _budget.EnsureMarkupDepth(depth);
         foreach (Node node in nodes)
         {
@@ -666,6 +996,12 @@ internal sealed class MarkdownInlineParser
                     break;
                 case ImageNode image:
                     plain.Append(image.Alt);
+                    break;
+                case FootnoteNode footnote:
+                    plain.Append(footnote.Raw);
+                    break;
+                case RawHtmlNode html:
+                    plain.Append(html.Text);
                     break;
                 default:
                     break;

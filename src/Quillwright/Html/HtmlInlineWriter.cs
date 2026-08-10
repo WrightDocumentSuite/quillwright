@@ -126,7 +126,8 @@ internal static class HtmlInlineWriter
             case MarkdownInlineKind.NoteReference when token.NoteReference is { } reference:
                 if (context.Note(reference) is { } note)
                 {
-                    html.Append("<sup id=\"").Append(Attribute(note.Label)).Append("-ref\"><a href=\"#")
+                    string referenceLabel = note.AddReference();
+                    html.Append("<sup id=\"").Append(Attribute(referenceLabel)).Append("\"><a href=\"#")
                         .Append(Attribute(note.Label)).Append("\">")
                         .Append(note.Number.ToString(CultureInfo.InvariantCulture))
                         .Append("</a></sup>");

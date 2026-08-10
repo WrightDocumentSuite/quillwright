@@ -36,10 +36,18 @@ internal static class RtfKeywordLookup
         if (value.SequenceEqual("atrfend"u8)) return RtfKeyword.AnnotationRangeEnd;
         if (value.SequenceEqual("atnid"u8)) return RtfKeyword.AnnotationId;
         if (value.SequenceEqual("atnauthor"u8)) return RtfKeyword.AnnotationAuthor;
+        if (value.SequenceEqual("atntime"u8)) return RtfKeyword.AnnotationTime;
         if (value.SequenceEqual("atndate"u8)) return RtfKeyword.AnnotationDate;
         if (value.SequenceEqual("atnref"u8)) return RtfKeyword.AnnotationReference;
         if (value.SequenceEqual("atnparent"u8)) return RtfKeyword.AnnotationParent;
         if (value.SequenceEqual("chatn"u8)) return RtfKeyword.AnnotationCharacter;
+        if (value.SequenceEqual("atnicn"u8)) return RtfKeyword.AnnotationIcon;
+        if (value.SequenceEqual("yr"u8)) return RtfKeyword.Year;
+        if (value.SequenceEqual("mo"u8)) return RtfKeyword.Month;
+        if (value.SequenceEqual("dy"u8)) return RtfKeyword.Day;
+        if (value.SequenceEqual("hr"u8)) return RtfKeyword.Hour;
+        if (value.SequenceEqual("min"u8)) return RtfKeyword.Minute;
+        if (value.SequenceEqual("sec"u8)) return RtfKeyword.Second;
         if (value.SequenceEqual("header"u8)) return RtfKeyword.Header;
         if (value.SequenceEqual("headerl"u8)) return RtfKeyword.HeaderLeft;
         if (value.SequenceEqual("headerr"u8)) return RtfKeyword.HeaderRight;

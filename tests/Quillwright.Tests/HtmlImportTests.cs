@@ -1,4 +1,5 @@
 using System.Text;
+using Quillwright.Diagnostics;
 using Quillwright.Html;
 using Quillwright.Model;
 using Quillwright.Rendering;
@@ -342,6 +343,58 @@ public class HtmlImportTests
         WordDocument document = await ImportHtmlBytesAsync(bytes);
 
         Assert.Equal("Привет", document.Paragraphs.Single().Text);
+    }
+
+    [Fact]
+    public void HtmlFileEncoding_ChunkedDecodePreservesSplitUtf8Sequences()
+    {
+        string expected = new string('a', (32 * 1024) - 1) + "😀é";
+        byte[] bytes = Encoding.UTF8.GetBytes(expected);
+
+        string decoded = HtmlEncoding.Decode(bytes, TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, decoded);
+    }
+
+    [Fact]
+    public void HtmlFileEncoding_LargeDecodeHonorsCancellation()
+    {
+        byte[] bytes = GC.AllocateUninitializedArray<byte>(32 * 1024 * 1024);
+        bytes.AsSpan().Fill((byte)'a');
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        cancellation.CancelAfter(TimeSpan.FromMilliseconds(1));
+
+        Assert.ThrowsAny<OperationCanceledException>(() => HtmlEncoding.Decode(bytes, cancellation.Token));
+    }
+
+    [Fact]
+    public async Task HtmlFileEncoding_DecodeEnforcesTheCharacterBudgetBeforeMaterialization()
+    {
+        const int CharacterLimit = 1_000;
+        byte[] bytes = GC.AllocateUninitializedArray<byte>(1024 * 1024);
+        bytes.AsSpan().Fill((byte)'a');
+        string path = Path.Combine(
+            Path.GetTempPath(), $"quillwright-html-decode-budget-{Guid.NewGuid():N}.html");
+        try
+        {
+            await File.WriteAllBytesAsync(path, bytes, TestContext.Current.CancellationToken);
+            var options = new HtmlImportOptions
+            {
+                Budget = DocumentLoadBudget.Default with { MaxTextCharacters = CharacterLimit },
+            };
+
+            DocumentLoadLimitException exception = await Assert.ThrowsAsync<DocumentLoadLimitException>(() =>
+                HtmlImporter.ImportFileAsync(path, options, TestContext.Current.CancellationToken));
+
+            Assert.Equal(nameof(DocumentLoadBudget.MaxTextCharacters), exception.LimitName);
+            Assert.Equal(CharacterLimit, exception.Limit);
+            Assert.True(exception.Observed > CharacterLimit);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]

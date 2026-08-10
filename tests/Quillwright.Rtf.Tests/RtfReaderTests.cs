@@ -1,4 +1,5 @@
 using System.Text;
+using Quillwright.Diagnostics;
 using Quillwright.Model;
 using Quillwright.Primitives;
 using Quillwright.Styles;
@@ -230,6 +231,187 @@ public class RtfReaderTests
     }
 
     [Fact]
+    public void AnnotationTime_ImportsACompleteSecondPrecisionTimestamp()
+    {
+        RtfImportResult result = RtfReader.Load(Ascii(
+            @"{\rtf1\ansi Text{\*\atnid AL}{\*\atnauthor Ada}" +
+            @"{\*\atntime\yr2024\mo5\dy6\hr14\min37\sec29}\chatn " +
+            @"{\*\annotation\pard Note\par}}"));
+
+        Comment comment = Assert.Single(result.Document.Comments);
+        Assert.Equal(new DateTimeOffset(2024, 5, 6, 14, 37, 29, TimeSpan.Zero), comment.Date);
+        Assert.Null(comment.DateUtc);
+        Assert.True(result.Diagnostics.IsEmpty, result.Diagnostics.ToString());
+    }
+
+    [Fact]
+    public void AnnotationTime_EnrichesAndOverridesPackedDateDeterministically()
+    {
+        RtfImportResult enriched = RtfReader.Load(Ascii(
+            @"{\rtf1\ansi Text{\*\atnid AL}{\*\atnauthor Ada}{\*\atntime\sec29}\chatn " +
+            @"{\*\annotation{\*\atndate 132664367}\pard Note\par}}"));
+        RtfImportResult conflicting = RtfReader.Load(Ascii(
+            @"{\rtf1\ansi Text{\*\atnid AL}{\*\atnauthor Ada}{\*\atntime\hr14\sec29}\chatn " +
+            @"{\*\annotation{\*\atndate 132664367}\pard Note\par}}"));
+
+        Assert.Equal(
+            new DateTimeOffset(2026, 8, 9, 16, 47, 29, TimeSpan.Zero),
+            Assert.Single(enriched.Document.Comments).Date);
+        Assert.True(enriched.Diagnostics.IsEmpty, enriched.Diagnostics.ToString());
+        Assert.Equal(
+            new DateTimeOffset(2026, 8, 9, 16, 47, 29, TimeSpan.Zero),
+            Assert.Single(conflicting.Document.Comments).Date);
+        Assert.Contains(conflicting.Diagnostics, static warning =>
+            warning.Kind == RtfImportWarningKind.MalformedAnnotation && warning.Subject == "annotation-time");
+    }
+
+    [Fact]
+    public void InvalidOrDatelessAnnotationTime_DoesNotInventMetadata()
+    {
+        RtfImportResult invalidWithBaseline = RtfReader.Load(Ascii(
+            @"{\rtf1\ansi Text{\*\atnid AL}{\*\atnauthor Ada}{\*\atntime\mo13}\chatn " +
+            @"{\*\annotation{\*\atndate 132664367}\pard Note\par}}"));
+        RtfImportResult dateless = RtfReader.Load(Ascii(
+            @"{\rtf1\ansi Text{\*\atnid AL}{\*\atnauthor Ada}{\*\atntime\hr14\min37}\chatn " +
+            @"{\*\annotation\pard Note\par}}"));
+
+        Assert.Equal(
+            new DateTimeOffset(2026, 8, 9, 16, 47, 0, TimeSpan.Zero),
+            Assert.Single(invalidWithBaseline.Document.Comments).Date);
+        Assert.Null(Assert.Single(dateless.Document.Comments).Date);
+        Assert.Contains(invalidWithBaseline.Diagnostics, static warning => warning.Subject == "annotation-time");
+        Assert.Contains(dateless.Diagnostics, static warning => warning.Subject == "annotation-time");
+    }
+
+    [Fact]
+    public void AnnotationIcon_IsSkippedWithAPreciseDiagnostic()
+    {
+        RtfImportResult result = RtfReader.Load(Ascii(
+            @"{\rtf1\ansi Text{\*\atnid AL}{\*\atnauthor Ada}{\*\atnicn{\pict 00}}\chatn " +
+            @"{\*\annotation\pard Note\par}}"));
+
+        Assert.Equal("Note", Assert.Single(result.Document.Comments).GetText());
+        Assert.Contains(result.Diagnostics, static warning =>
+            warning.Kind == RtfImportWarningKind.UnsupportedDestination &&
+            warning.Subject == "AnnotationIcon");
+    }
+
+    [Fact]
+    public void ExplicitParent_UsesOnePriorAnnotationIdBeforeLegacyReference()
+    {
+        RtfImportResult result = RtfReader.Load(Ascii(
+            @"{\rtf1\ansi Text" +
+            Annotation("P", "one", "Spec parent") +
+            Annotation("X", "P", "Legacy candidate") +
+            Annotation("C", "three", "Child", "P") +
+            "}"));
+
+        Comment specParent = result.Document.Comments.Single(static comment => comment.GetText() == "Spec parent");
+        Comment child = result.Document.Comments.Single(static comment => comment.GetText() == "Child");
+        Assert.Equal(specParent.Id, child.ParentId);
+    }
+
+    [Fact]
+    public void ExplicitParent_NeverUsesAFutureAnnotationOrCreatesACycle()
+    {
+        RtfImportResult result = RtfReader.Load(Ascii(
+            @"{\rtf1\ansi Text" +
+            Annotation("A", "one", "First", "B") +
+            Annotation("B", "two", "Second", "A") +
+            "}"));
+
+        Comment first = result.Document.Comments.Single(static comment => comment.GetText() == "First");
+        Comment second = result.Document.Comments.Single(static comment => comment.GetText() == "Second");
+        Assert.Null(first.ParentId);
+        Assert.Equal(first.Id, second.ParentId);
+        Assert.Contains(result.Diagnostics, static warning =>
+            warning.Subject == "annotation-parent" &&
+            warning.Message.Contains("preceding", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ExplicitParent_DuplicateAnnotationIdsOrLegacyReferencesAreAmbiguous()
+    {
+        RtfImportResult duplicateIds = RtfReader.Load(Ascii(
+            @"{\rtf1\ansi Text" +
+            Annotation("P", "one", "First") +
+            Annotation("P", "two", "Second") +
+            Annotation("C", "three", "Child", "P") +
+            "}"));
+        RtfImportResult duplicateReferences = RtfReader.Load(Ascii(
+            @"{\rtf1\ansi Text" +
+            Annotation("A", "shared", "First") +
+            Annotation("B", "shared", "Second") +
+            Annotation("C", "three", "Child", "shared") +
+            "}"));
+
+        Assert.Null(duplicateIds.Document.Comments.Single(static comment => comment.GetText() == "Child").ParentId);
+        Assert.Null(duplicateReferences.Document.Comments.Single(static comment => comment.GetText() == "Child").ParentId);
+        Assert.Contains(duplicateIds.Diagnostics, static warning =>
+            warning.Subject == "annotation-parent" && warning.Message.Contains("ambiguous", StringComparison.Ordinal));
+        Assert.Contains(duplicateReferences.Diagnostics, static warning =>
+            warning.Subject == "annotation-parent" && warning.Message.Contains("ambiguous", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ExplicitParent_AcceptsOnePriorLegacyReferenceFailSoft()
+    {
+        RtfImportResult result = RtfReader.Load(Ascii(
+            @"{\rtf1\ansi Text" +
+            Annotation("A", "legacy", "Parent") +
+            Annotation("C", "child", "Child", "legacy") +
+            "}"));
+
+        Comment parent = result.Document.Comments.Single(static comment => comment.GetText() == "Parent");
+        Comment child = result.Document.Comments.Single(static comment => comment.GetText() == "Child");
+        Assert.Equal(parent.Id, child.ParentId);
+    }
+
+    [Fact]
+    public void LargeAnnotationTopology_ImportsAndExportsWithStableParentLinks()
+    {
+        const int rootCount = 2_500;
+        const int chainCount = 5_000;
+        const int annotationCount = (rootCount * 2) + chainCount;
+        var source = new StringBuilder(1_500_000);
+        source.Append(@"{\rtf1\ansi Text");
+        for (int index = 0; index < rootCount; index++)
+            AppendLargeAnnotation(source, $"R{index}", null, "Root");
+        for (int index = 0; index < rootCount; index++)
+            AppendLargeAnnotation(source, $"C{index}", $"R{index}", "Reply");
+        string chainParent = "C0";
+        for (int index = 0; index < chainCount; index++)
+        {
+            string annotationId = $"N{index}";
+            AppendLargeAnnotation(source, annotationId, chainParent, "Nested");
+            chainParent = annotationId;
+        }
+        source.Append(" Tail}");
+
+        var options = new RtfImportOptions
+        {
+            Budget = DocumentLoadBudget.Default with { MaxMarkupNodes = 1 + (annotationCount * 3L) },
+        };
+        RtfImportResult imported = RtfReader.Load(Ascii(source.ToString()), options);
+        Comment[] comments = [.. imported.Document.Comments];
+
+        Assert.Equal(annotationCount, comments.Length);
+        Assert.Equal("Text Tail", imported.Document.Sections[0].Blocks.Paragraphs.Single().GetText());
+        for (int index = 0; index < rootCount; index++)
+            Assert.Equal(comments[index].Id, comments[rootCount + index].ParentId);
+        int expectedParentId = comments[rootCount].Id;
+        for (int index = rootCount * 2; index < comments.Length; index++)
+        {
+            Assert.Equal(expectedParentId, comments[index].ParentId);
+            expectedParentId = comments[index].Id;
+        }
+
+        RtfExportResult exported = RtfWriter.Save(imported.Document);
+        Assert.Contains(@"\atnparent R0", exported.ToString(), StringComparison.Ordinal);
+        Assert.Contains(@"\atnparent N0", exported.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void MalformedAnnotationAnchorsAndParents_AreRecoveredWithDiagnostics()
     {
         RtfImportResult result = RtfReader.Load(Ascii(
@@ -347,6 +529,25 @@ public class RtfReaderTests
                 stream,
                 options,
                 TestContext.Current.CancellationToken));
+    }
+
+    private static string Annotation(string id, string reference, string text, string? parent = null) =>
+        "{\\*\\atnid " + id + "}{\\*\\atnauthor Author}\\chatn {\\*\\annotation" +
+        "{\\*\\atnref " + reference + "}" +
+        (parent is null ? string.Empty : "{\\*\\atnparent " + parent + "}") +
+        "\\pard " + text + "\\par}";
+
+    private static void AppendLargeAnnotation(
+        StringBuilder builder,
+        string annotationId,
+        string? parentAnnotationId,
+        string text)
+    {
+        builder.Append("{\\*\\atnid ").Append(annotationId)
+            .Append("}{\\*\\atnauthor Author}\\chatn {\\*\\annotation");
+        if (parentAnnotationId is not null)
+            builder.Append("{\\*\\atnparent ").Append(parentAnnotationId).Append('}');
+        builder.Append("\\pard ").Append(text).Append("\\par}");
     }
 
     private static byte[] Ascii(string value) => Encoding.ASCII.GetBytes(value);

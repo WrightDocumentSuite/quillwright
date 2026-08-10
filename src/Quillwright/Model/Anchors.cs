@@ -75,3 +75,14 @@ internal struct AnchoredRange
     /// <summary>Offset one past the last covered character.</summary>
     public readonly int End => Start + Length;
 }
+
+/// <summary>One object to insert during a format reader's stable bulk materialization pass.</summary>
+internal readonly record struct ImportedObjectInsertion(
+    int SourceOffset,
+    int Order,
+    InlineObject Object,
+    RunFormat Format,
+    bool UseAppendRunSemantics = false);
+
+/// <summary>One already-mapped zero-width mark placed during a bulk import pass.</summary>
+internal readonly record struct ImportedMarkPlacement(int FinalOffset, int Order, InlineMark Mark);

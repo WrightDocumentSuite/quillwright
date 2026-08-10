@@ -33,7 +33,7 @@ Semantic elements first, CSS only for what HTML has no element for:
 | Colour, size, family, small caps, character shading | `span` with the CSS |
 | Hyperlinks and bookmarks | `a href` (with `title`), `a id`; internal links resolve to the bookmark's id |
 | Lists | Real nested `ul`/`ol` from the numbering: the kind per level, `type` for roman and letters, CSS2 marker styles where HTML has no `type`, and `start`/`value` where Word's counting departs from HTML's |
-| Tables | `table` with `thead`/`th` from header rows, `colspan` from grid spans, `rowspan` from vertical merges, cell shading and vertical alignment as CSS |
+| Tables | `table` with `caption` from the accessible table caption, `thead`/`th` from header rows, `colspan` from grid spans, `rowspan` from vertical merges, cell shading and vertical alignment as CSS |
 | Pictures | `img` with alt text and its stated size; `data:` URI or sidecar file |
 | Footnotes and endnotes | Superscript links to a `footnotes` section at the foot, linked back |
 | The `Quote` and code styles | `blockquote` and `pre` |
@@ -52,6 +52,16 @@ paragraph styles, restart overrides and nested-list ownership therefore uses the
 view instead of rescanning `numbering.xml` for every item. If a malformed document contains
 duplicate numbering identifiers, the first declaration still wins, matching the public model's
 existing resolution semantics.
+
+Notes use the reciprocal-link pattern suggested for longer annotations by WHATWG HTML §4.14.4,
+because HTML has no dedicated footnote element. `fn-<id>-<ordinal>` and
+`en-<id>-<ordinal>` labels distinguish footnotes from
+endnotes and carry the model id. Repeated references share one definition but receive distinct
+HTML `id` values and distinct backlinks, so the page remains standards-valid. Note bodies may
+contain several paragraphs and references to other notes; the exporter discovers that growing
+set before it emits definitions, which also makes cyclic and self-references finite. This exact
+generated shape is recognized by the HTML importer and reconstructs `Note`/`NoteReference`
+objects rather than ordinary links and list items.
 
 A link whose target could execute — `javascript:` and its relatives — is rendered as plain
 text and named in the diagnostics (`UnsafeLinkSkipped`); text and attributes are always

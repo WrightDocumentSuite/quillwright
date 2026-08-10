@@ -78,6 +78,7 @@ internal sealed partial class HtmlTreeBuilder
 
     private readonly HtmlTokenizer _tokenizer;
     private readonly DocumentLoadBudgetState? _budget;
+    private readonly CancellationToken _cancellationToken;
     private readonly HtmlElement _document = new("#document");
     private readonly HtmlElement? _fragment;
     private readonly HtmlElement? _context;
@@ -98,22 +99,38 @@ internal sealed partial class HtmlTreeBuilder
     private bool _ignoreNextLineFeed;
 
     internal HtmlTreeBuilder(string input, DocumentLoadBudgetState? budget = null)
+        : this(input, budget, CancellationToken.None)
+    {
+    }
+
+    internal HtmlTreeBuilder(string input, DocumentLoadBudgetState? budget, CancellationToken cancellationToken)
     {
         _budget = budget;
+        _cancellationToken = cancellationToken;
         _budget?.AddMarkupNode(); // #document
-        _tokenizer = new HtmlTokenizer(input, CanStartCdata);
+        _tokenizer = new HtmlTokenizer(input, CanStartCdata, cancellationToken);
     }
 
     /// <summary>Creates the fragment parser with the supplied element as its context.</summary>
     internal HtmlTreeBuilder(string input, HtmlElement context, DocumentLoadBudgetState? budget = null)
+        : this(input, context, budget, CancellationToken.None)
+    {
+    }
+
+    internal HtmlTreeBuilder(
+        string input,
+        HtmlElement context,
+        DocumentLoadBudgetState? budget,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
 
         _budget = budget;
+        _cancellationToken = cancellationToken;
         _budget?.AddMarkupNode(2); // #document and #document-fragment
         _context = context;
         _fragment = new HtmlElement("#document-fragment");
-        _tokenizer = new HtmlTokenizer(input, CanStartCdata);
+        _tokenizer = new HtmlTokenizer(input, CanStartCdata, cancellationToken);
 
         if (context.Namespace == HtmlNamespace.Html)
         {
@@ -164,6 +181,7 @@ internal sealed partial class HtmlTreeBuilder
     {
         while (!_done)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             HtmlToken token = _tokenizer.Next();
             Dispatch(token);
             if (token.Kind == HtmlTokenKind.EndOfFile)

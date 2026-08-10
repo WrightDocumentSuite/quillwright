@@ -33,6 +33,12 @@ public enum HtmlImportWarningKind : byte
 
     /// <summary>Content that cannot be carried — a script, an embedded frame — was left out.</summary>
     ContentSkipped,
+
+    /// <summary>A generated note definition, reference or reciprocal link was malformed or duplicated.</summary>
+    NoteMalformed,
+
+    /// <summary>A generated note reference or definition has no matching counterpart.</summary>
+    NoteDangling,
 }
 
 /// <summary>One compromise made while importing, with the line it was made on.</summary>

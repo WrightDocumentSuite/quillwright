@@ -35,6 +35,316 @@ public sealed partial class Paragraph
         return this;
     }
 
+    /// <summary>
+    /// Materializes format-reader-owned objects and marks in one stable pass. Object offsets
+    /// address the paragraph before this batch; mark offsets address the final paragraph.
+    /// </summary>
+    internal void InsertImportedAnchors(
+        IReadOnlyList<ImportedObjectInsertion> objectInsertions,
+        IReadOnlyList<ImportedMarkPlacement> markPlacements,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(objectInsertions);
+        ArgumentNullException.ThrowIfNull(markPlacements);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        int oldLength = _length;
+        ImportedObjectInsertion[] insertions = new ImportedObjectInsertion[objectInsertions.Count];
+        for (int index = 0; index < insertions.Length; index++)
+        {
+            CheckImportCancellation(cancellationToken, index);
+            ImportedObjectInsertion insertion = objectInsertions[index];
+            ArgumentNullException.ThrowIfNull(insertion.Object);
+            insertions[index] = insertion with
+            {
+                SourceOffset = Math.Clamp(insertion.SourceOffset, 0, oldLength),
+            };
+        }
+        Array.Sort(insertions, static (left, right) =>
+        {
+            int offset = left.SourceOffset.CompareTo(right.SourceOffset);
+            return offset != 0 ? offset : left.Order.CompareTo(right.Order);
+        });
+        cancellationToken.ThrowIfCancellationRequested();
+
+        int newLength = checked(oldLength + insertions.Length);
+        int[] finalObjectOffsets = new int[insertions.Length];
+        RunKind[] insertedKinds = new RunKind[insertions.Length];
+        string?[] insertedAttributes = new string?[insertions.Length];
+        char[] rebuiltBuffer = newLength == 0
+            ? []
+            : new char[Math.Max(newLength, _buffer.Length)];
+        int sourceOffset = 0;
+        int destinationOffset = 0;
+        int surroundingRunIndex = 0;
+        for (int index = 0; index < insertions.Length; index++)
+        {
+            CheckImportCancellation(cancellationToken, index);
+            ImportedObjectInsertion insertion = insertions[index];
+            int copyLength = insertion.SourceOffset - sourceOffset;
+            if (copyLength > 0)
+            {
+                _buffer.AsSpan(sourceOffset, copyLength)
+                    .CopyTo(rebuiltBuffer.AsSpan(destinationOffset));
+                sourceOffset += copyLength;
+                destinationOffset += copyLength;
+            }
+
+            finalObjectOffsets[index] = destinationOffset;
+            rebuiltBuffer[destinationOffset++] = insertion.Object.PlaceholderChar;
+
+            if (insertion.UseAppendRunSemantics)
+            {
+                insertedKinds[index] = RunKind.Text;
+                continue;
+            }
+
+            while (surroundingRunIndex < _runs.Count - 1 &&
+                   _runs[surroundingRunIndex].End <= insertion.SourceOffset)
+            {
+                surroundingRunIndex++;
+            }
+            if ((uint)surroundingRunIndex < (uint)_runs.Count)
+            {
+                insertedKinds[index] = _runs[surroundingRunIndex].Kind;
+                insertedAttributes[index] = _runs[surroundingRunIndex].Attributes;
+            }
+        }
+
+        if (sourceOffset < oldLength)
+        {
+            _buffer.AsSpan(sourceOffset, oldLength - sourceOffset)
+                .CopyTo(rebuiltBuffer.AsSpan(destinationOffset));
+        }
+
+        var rebuiltRuns = new List<RunSpan>(_runs.Count + insertions.Length);
+        int nextInsertion = 0;
+        foreach (RunSpan run in _runs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            while (nextInsertion < insertions.Length &&
+                   insertions[nextInsertion].SourceOffset < run.Start)
+            {
+                AddImportedRun(rebuiltRuns, insertions[nextInsertion], finalObjectOffsets[nextInsertion],
+                    insertedKinds[nextInsertion], insertedAttributes[nextInsertion]);
+                nextInsertion++;
+            }
+
+            int runSourceOffset = run.Start;
+            while (nextInsertion < insertions.Length &&
+                   insertions[nextInsertion].SourceOffset < run.End)
+            {
+                int insertionOffset = insertions[nextInsertion].SourceOffset;
+                AddImportedRunSegment(rebuiltRuns, run, runSourceOffset, insertionOffset, nextInsertion);
+                do
+                {
+                    CheckImportCancellation(cancellationToken, nextInsertion);
+                    AddImportedRun(rebuiltRuns, insertions[nextInsertion], finalObjectOffsets[nextInsertion],
+                        insertedKinds[nextInsertion], insertedAttributes[nextInsertion]);
+                    nextInsertion++;
+                }
+                while (nextInsertion < insertions.Length &&
+                       insertions[nextInsertion].SourceOffset == insertionOffset);
+                runSourceOffset = insertionOffset;
+            }
+
+            AddImportedRunSegment(rebuiltRuns, run, runSourceOffset, run.End, nextInsertion);
+        }
+
+        while (nextInsertion < insertions.Length)
+        {
+            CheckImportCancellation(cancellationToken, nextInsertion);
+            AddImportedRun(rebuiltRuns, insertions[nextInsertion], finalObjectOffsets[nextInsertion],
+                insertedKinds[nextInsertion], insertedAttributes[nextInsertion]);
+            nextInsertion++;
+        }
+
+        var rebuiltObjects = new List<AnchoredObject>((_objects?.Count ?? 0) + insertions.Length);
+        int newObjectIndex = 0;
+        if (_objects is not null)
+        {
+            int existingObjectIndex = 0;
+            foreach (AnchoredObject existing in _objects)
+            {
+                CheckImportCancellation(cancellationToken, existingObjectIndex++);
+                while (newObjectIndex < insertions.Length &&
+                       insertions[newObjectIndex].SourceOffset <= existing.Offset)
+                {
+                    AddImportedObject(rebuiltObjects, insertions[newObjectIndex], finalObjectOffsets[newObjectIndex]);
+                    newObjectIndex++;
+                }
+
+                rebuiltObjects.Add(new AnchoredObject
+                {
+                    Offset = checked(existing.Offset + newObjectIndex),
+                    Object = existing.Object,
+                });
+            }
+        }
+        while (newObjectIndex < insertions.Length)
+        {
+            CheckImportCancellation(cancellationToken, newObjectIndex);
+            AddImportedObject(rebuiltObjects, insertions[newObjectIndex], finalObjectOffsets[newObjectIndex]);
+            newObjectIndex++;
+        }
+
+        ImportedMarkPlacement[] importedMarks = new ImportedMarkPlacement[markPlacements.Count];
+        for (int index = 0; index < importedMarks.Length; index++)
+        {
+            CheckImportCancellation(cancellationToken, index);
+            ImportedMarkPlacement placement = markPlacements[index];
+            ArgumentNullException.ThrowIfNull(placement.Mark);
+            importedMarks[index] = placement with
+            {
+                FinalOffset = Math.Clamp(placement.FinalOffset, 0, newLength),
+            };
+        }
+        Array.Sort(importedMarks, static (left, right) =>
+        {
+            int offset = left.FinalOffset.CompareTo(right.FinalOffset);
+            return offset != 0 ? offset : left.Order.CompareTo(right.Order);
+        });
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var rebuiltMarks = new List<AnchoredMark>((_marks?.Count ?? 0) + importedMarks.Length);
+        int existingMarkIndex = 0;
+        int importedMarkIndex = 0;
+        while ((_marks is not null && existingMarkIndex < _marks.Count) ||
+               importedMarkIndex < importedMarks.Length)
+        {
+            CheckImportCancellation(cancellationToken, existingMarkIndex + importedMarkIndex);
+            int existingFinalOffset = _marks is not null && existingMarkIndex < _marks.Count
+                ? checked(_marks[existingMarkIndex].Offset +
+                    LowerBound(insertions, _marks[existingMarkIndex].Offset))
+                : int.MaxValue;
+            int importedFinalOffset = importedMarkIndex < importedMarks.Length
+                ? importedMarks[importedMarkIndex].FinalOffset
+                : int.MaxValue;
+            if (existingFinalOffset <= importedFinalOffset)
+            {
+                rebuiltMarks.Add(new AnchoredMark
+                {
+                    Offset = existingFinalOffset,
+                    Mark = _marks![existingMarkIndex++].Mark,
+                });
+            }
+            else
+            {
+                ImportedMarkPlacement placement = importedMarks[importedMarkIndex++];
+                rebuiltMarks.Add(new AnchoredMark { Offset = placement.FinalOffset, Mark = placement.Mark });
+            }
+        }
+
+        if (_ranges is not null)
+        {
+            Span<AnchoredRange> ranges = CollectionsMarshal.AsSpan(_ranges);
+            for (int index = 0; index < ranges.Length; index++)
+            {
+                CheckImportCancellation(cancellationToken, index);
+                int start = checked(ranges[index].Start + LowerBound(insertions, ranges[index].Start));
+                int end = checked(ranges[index].End + LowerBound(insertions, ranges[index].End));
+                ranges[index].Start = start;
+                ranges[index].Length = end - start;
+            }
+        }
+
+        _buffer = rebuiltBuffer;
+        _length = newLength;
+        _cachedText = null;
+        _runs.Clear();
+        _runs.AddRange(rebuiltRuns);
+        _objects = rebuiltObjects.Count == 0 ? null : rebuiltObjects;
+        _marks = rebuiltMarks.Count == 0 ? null : rebuiltMarks;
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private static void AddImportedRunSegment(
+        List<RunSpan> target,
+        RunSpan source,
+        int sourceStart,
+        int sourceEnd,
+        int insertedBefore)
+    {
+        if (sourceEnd <= sourceStart)
+            return;
+        AddImportedRun(target, new RunSpan
+        {
+            Start = checked(sourceStart + insertedBefore),
+            Length = sourceEnd - sourceStart,
+            Format = source.Format,
+            Kind = source.Kind,
+            Attributes = source.Attributes,
+        });
+    }
+
+    private static void AddImportedRun(
+        List<RunSpan> target,
+        ImportedObjectInsertion insertion,
+        int finalOffset,
+        RunKind kind,
+        string? attributes) =>
+        AddImportedRun(target, new RunSpan
+        {
+            Start = finalOffset,
+            Length = 1,
+            Format = insertion.Format,
+            Kind = kind,
+            Attributes = attributes,
+        });
+
+    private static void AddImportedRun(List<RunSpan> target, RunSpan run)
+    {
+        if (run.Length <= 0)
+            return;
+
+        if (target.Count > 0)
+        {
+            RunSpan previous = target[^1];
+            if (previous.End == run.Start &&
+                previous.Kind == run.Kind &&
+                ReferenceEquals(previous.Format, run.Format) &&
+                previous.Attributes == run.Attributes)
+            {
+                previous.Length = checked(previous.Length + run.Length);
+                target[^1] = previous;
+                return;
+            }
+        }
+
+        target.Add(run);
+    }
+
+    private void AddImportedObject(
+        List<AnchoredObject> target,
+        ImportedObjectInsertion insertion,
+        int finalOffset)
+    {
+        target.Add(new AnchoredObject { Offset = finalOffset, Object = insertion.Object });
+        Anchor(insertion.Object);
+    }
+
+    private static int LowerBound(ImportedObjectInsertion[] insertions, int value)
+    {
+        int low = 0;
+        int high = insertions.Length;
+        while (low < high)
+        {
+            int middle = low + ((high - low) >> 1);
+            if (insertions[middle].SourceOffset < value)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+
+        return low;
+    }
+
+    private static void CheckImportCancellation(CancellationToken cancellationToken, int index)
+    {
+        if ((index & 0xFFF) == 0)
+            cancellationToken.ThrowIfCancellationRequested();
+    }
+
     /// <summary>Character formatting of the run covering an offset.</summary>
     /// <param name="offset">Offset to look at.</param>
     public RunFormat FormatAtOffset(int offset) => FormatAt(Math.Clamp(offset, 0, Math.Max(0, _length - 1)));

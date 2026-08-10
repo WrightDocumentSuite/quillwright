@@ -610,6 +610,8 @@ public static class RtfWriter
     {
         private readonly Dictionary<int, Comment> _comments = [];
         private readonly Dictionary<int, int> _references = [];
+        private readonly Dictionary<string, int> _annotationIdCounts = new(StringComparer.Ordinal);
+        private readonly Dictionary<int, int> _rootIds = [];
         private readonly HashSet<int> _emitted = [];
         private int? _lastThreadRoot;
 
@@ -628,6 +630,9 @@ public static class RtfWriter
                 }
 
                 _references.Add(comment.Id, reference++);
+                string? annotationId = NormalizeAnnotationId(comment.Initials);
+                if (annotationId is not null)
+                    _annotationIdCounts[annotationId] = _annotationIdCounts.GetValueOrDefault(annotationId) + 1;
             }
 
             if (document.Comments.Any(static comment => comment.IsResolved))
@@ -644,6 +649,14 @@ public static class RtfWriter
                     RtfExportWarningKind.ContentSkipped,
                     "Word comment reactions in extLst have no RTF 1.9.1 representation and were not exported.",
                     "comment-reactions");
+            }
+
+            if (document.Comments.Any(static comment => comment.IsFollowUp && comment.ParentId is null))
+            {
+                diagnostics.Add(
+                    RtfExportWarningKind.ContentSkipped,
+                    "RTF 1.9.1 annotations have no intelligent-placeholder field; the follow-up prompt body was omitted.",
+                    "comment-follow-up");
             }
         }
 
@@ -697,16 +710,20 @@ public static class RtfWriter
             WriteText(builder, comment.Initials ?? string.Empty);
             builder.Append("}{\\*\\atnauthor ");
             WriteText(builder, comment.Author ?? string.Empty);
-            builder.Append("}\\chatn {\\*\\annotation");
-            builder.Append("{\\*\\atnref ")
-                .Append(reference.ToString(CultureInfo.InvariantCulture))
-                .Append('}');
+            builder.Append('}');
 
             DateTimeOffset? timestamp = comment.DateUtc ?? comment.Date;
+            DateTime? wallClock = null;
             if (timestamp is DateTimeOffset date)
             {
-                DateTime wallClock = comment.DateUtc is not null ? date.UtcDateTime : date.DateTime;
-                if (TryPackDttm(wallClock, out uint packed))
+                wallClock = comment.DateUtc is not null ? date.UtcDateTime : date.DateTime;
+                WriteAnnotationTime(builder, wallClock.Value);
+            }
+
+            builder.Append("\\chatn {\\*\\annotation");
+            if (wallClock is DateTime value)
+            {
+                if (TryPackDttm(value, out uint packed))
                 {
                     builder.Append("{\\*\\atndate ")
                         .Append(packed.ToString(CultureInfo.InvariantCulture))
@@ -716,13 +733,19 @@ public static class RtfWriter
                 {
                     diagnostics.Add(
                         RtfExportWarningKind.ContentSkipped,
-                        $"Comment {commentId} has a date outside the RTF DTTM range and it was omitted.",
+                        $"Comment {commentId} has a date outside the packed RTF DTTM range; atntime was written but atndate was omitted.",
                         "comment-date");
                 }
             }
 
+            builder.Append("{\\*\\atnref ")
+                .Append(reference.ToString(CultureInfo.InvariantCulture))
+                .Append('}');
             WriteParent(builder, comment, diagnostics);
-            WriteCommentBody(builder, comment, diagnostics, resources);
+            if (comment.IsFollowUp && comment.ParentId is null)
+                builder.Append("\\pard\\plain {\\chatn }\\par\n");
+            else
+                WriteCommentBody(builder, comment, diagnostics, resources);
             builder.Append('}');
         }
 
@@ -749,7 +772,7 @@ public static class RtfWriter
             }
 
             if (!_comments.TryGetValue(parentId, out Comment? parent) ||
-                !_references.TryGetValue(parentId, out int parentReference))
+                !_references.ContainsKey(parentId))
             {
                 diagnostics.Add(
                     RtfExportWarningKind.ContentSkipped,
@@ -776,28 +799,93 @@ public static class RtfWriter
                 return;
             }
 
-            // Keep an explicit parent reference for conforming readers when the model order
-            // cannot use Word's adjacent-thread -1 convention.
-            builder.Append("{\\*\\atnparent ")
-                .Append(parentReference.ToString(CultureInfo.InvariantCulture))
-                .Append('}');
+            string? parentAnnotationId = NormalizeAnnotationId(parent.Initials);
+            if (parentAnnotationId is null || HasAmbiguousAnnotationId(comment, parent, parentAnnotationId))
+            {
+                diagnostics.Add(
+                    RtfExportWarningKind.ContentSkipped,
+                    parentAnnotationId is null
+                        ? "A non-adjacent reply has no parent annotation id; its RTF parent link was omitted."
+                        : "A non-adjacent reply's parent annotation id is shared by another comment; its ambiguous RTF parent link was omitted.",
+                    "comment-parent-annotation-id");
+                diagnostics.Add(
+                    RtfExportWarningKind.ContentSkipped,
+                    "A reply was not adjacent to its thread root and no unambiguous atnparent value could be emitted; it was exported at top level.",
+                    "comment-thread-order");
+                return;
+            }
+
+            // RTF 1.9.1 requires the parent's annotation id here, not the numeric atnref
+            // that links an annotation body to its range bookmark.
+            builder.Append("{\\*\\atnparent ");
+            WriteText(builder, parent.Initials!);
+            builder.Append('}');
             diagnostics.Add(
                 RtfExportWarningKind.ContentSkipped,
                 "A reply was not adjacent to its thread root; an explicit atnparent reference was emitted, which some Word versions flatten.",
                 "comment-thread-order");
         }
 
+        private bool HasAmbiguousAnnotationId(Comment comment, Comment parent, string parentAnnotationId)
+        {
+            int excluded = 1; // The intended parent is not an ambiguity.
+            if (comment.Id != parent.Id && NormalizeAnnotationId(comment.Initials) == parentAnnotationId)
+                excluded++;
+            return _annotationIdCounts.GetValueOrDefault(parentAnnotationId) > excluded;
+        }
+
+        private static string? NormalizeAnnotationId(string? value) =>
+            string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+        private static void WriteAnnotationTime(StringBuilder builder, DateTime value)
+        {
+            builder.Append("{\\*\\atntime\\yr")
+                .Append(value.Year.ToString(CultureInfo.InvariantCulture))
+                .Append("\\mo")
+                .Append(value.Month.ToString(CultureInfo.InvariantCulture))
+                .Append("\\dy")
+                .Append(value.Day.ToString(CultureInfo.InvariantCulture))
+                .Append("\\hr")
+                .Append(value.Hour.ToString(CultureInfo.InvariantCulture))
+                .Append("\\min")
+                .Append(value.Minute.ToString(CultureInfo.InvariantCulture))
+                .Append("\\sec")
+                .Append(value.Second.ToString(CultureInfo.InvariantCulture))
+                .Append('}');
+        }
+
         private int RootId(Comment comment)
         {
-            var seen = new HashSet<int>();
-            while (comment.ParentId is int parentId &&
-                   seen.Add(comment.Id) &&
-                   _comments.TryGetValue(parentId, out Comment? parent))
-            {
-                comment = parent;
-            }
+            if (_rootIds.TryGetValue(comment.Id, out int cachedRootId))
+                return cachedRootId;
 
-            return comment.Id;
+            var path = new List<int>();
+            var seen = new HashSet<int>();
+            while (true)
+            {
+                if (_rootIds.TryGetValue(comment.Id, out cachedRootId))
+                {
+                    foreach (int commentId in path)
+                        _rootIds[commentId] = cachedRootId;
+                    return cachedRootId;
+                }
+
+                if (!seen.Add(comment.Id))
+                    return comment.Id;
+
+                path.Add(comment.Id);
+                if (comment.ParentId is int parentId &&
+                    _comments.TryGetValue(parentId, out Comment? parent))
+                {
+                    comment = parent;
+                    continue;
+                }
+
+                int rootId = comment.Id;
+                foreach (int commentId in path)
+                    _rootIds[commentId] = rootId;
+                return rootId;
+            }
         }
 
         private static bool TryPackDttm(DateTime value, out uint packed)

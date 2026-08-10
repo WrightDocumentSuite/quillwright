@@ -418,6 +418,11 @@ internal static class HtmlWriter
     private static void WriteTable(StringBuilder html, Table table, HtmlContext context)
     {
         html.Append("<table>\n");
+        if (!string.IsNullOrWhiteSpace(table.Format.Caption))
+        {
+            html.Append("<caption>").Append(HtmlInlineWriter.Escape(table.Format.Caption))
+                .Append("</caption>\n");
+        }
 
         List<TableRow> rows = [.. table.Rows.Where(row => MarkdownRevisionView.RowVisible(row, context.RevisionMode))];
         int headerRows = 0;
@@ -529,12 +534,31 @@ internal static class HtmlWriter
         if (context.Notes.Count == 0)
             return;
 
-        html.Append("<hr>\n<section class=\"footnotes\">\n<ol>\n");
-        foreach (HtmlNoteEntry note in context.Notes)
+        // A note body may itself reference a later note. Render every body first, allowing
+        // the queue to grow, so the final emission sees all notes and every reciprocal link.
+        // Delaying the <li> output also lets a later body add a backlink to an earlier note.
+        var bodies = new List<string>();
+        for (int index = 0; index < context.Notes.Count; index++)
         {
+            var body = new StringBuilder();
+            WriteBlocks(body, context.Notes[index].Body.Blocks, context);
+            bodies.Add(body.ToString());
+        }
+
+        html.Append("<hr>\n<section class=\"footnotes\">\n<ol>\n");
+        for (int noteIndex = 0; noteIndex < context.Notes.Count; noteIndex++)
+        {
+            HtmlNoteEntry note = context.Notes[noteIndex];
             html.Append("<li id=\"").Append(HtmlInlineWriter.Attribute(note.Label)).Append("\">\n");
-            WriteBlocks(html, note.Body.Blocks, context);
-            html.Append("<a href=\"#").Append(HtmlInlineWriter.Attribute(note.Label)).Append("-ref\">↩</a>\n</li>\n");
+            html.Append(bodies[noteIndex]);
+            for (int index = 0; index < note.ReferenceLabels.Count; index++)
+            {
+                if (index > 0)
+                    html.Append(' ');
+                html.Append("<a href=\"#").Append(HtmlInlineWriter.Attribute(note.ReferenceLabels[index]))
+                    .Append("\">↩</a>");
+            }
+            html.Append("\n</li>\n");
         }
 
         html.Append("</ol>\n</section>\n");
