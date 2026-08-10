@@ -107,18 +107,17 @@ public sealed class RtfLoadBudgetTests
         };
         using var cancellation = new CancellationTokenSource();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task parsing = Task.Factory.StartNew(
-            () =>
-            {
-                started.SetResult();
-                _ = new RtfParser(options, cancellation.Token).Parse(content);
-            },
-            CancellationToken.None,
-            TaskCreationOptions.LongRunning,
-            TaskScheduler.Default);
+        var continueParsing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task parsing = Task.Run(async () =>
+        {
+            started.SetResult();
+            await continueParsing.Task;
+            _ = new RtfParser(options, cancellation.Token).Parse(content);
+        }, TestContext.Current.CancellationToken);
 
         await started.Task.WaitAsync(TestContext.Current.CancellationToken);
         cancellation.Cancel();
+        continueParsing.SetResult();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await parsing.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
