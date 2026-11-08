@@ -2,7 +2,9 @@
 
 [![CI](https://github.com/WrightDocumentSuite/quillwright/actions/workflows/ci.yml/badge.svg)](https://github.com/WrightDocumentSuite/quillwright/actions/workflows/ci.yml)
 
-A .NET 10 library for Word documents (Apache-2.0). Layered the way `System.Text.Json` is —
+[Website](https://wrightsuite.com/) · [Documentation](https://github.com/WrightDocumentSuite/quillwright/tree/main/docs) · [NuGet](https://www.nuget.org/packages/Quillwright)
+
+A .NET library for Word documents (Apache-2.0). Layered the way `System.Text.Json` is —
 primitives, streaming, document model, typed templating — with a paragraph representation
 built for the way Word actually stores text.
 

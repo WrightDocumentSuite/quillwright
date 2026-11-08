@@ -1,6 +1,6 @@
 # Quillwright
 
-A .NET 10 library for Word documents (Apache-2.0). Layered the way `System.Text.Json` is —
+A .NET library for Word documents (Apache-2.0). Layered the way `System.Text.Json` is —
 primitives, streaming, document model, typed templating — with a paragraph representation
 built for the way Word actually stores text.
 
@@ -53,6 +53,8 @@ await doc.SaveAsync("agreement.docx");
 - **Async-first I/O** on the .NET 10 asynchronous `ZipArchive` APIs, AOT- and trim-safe.
 
 ## Packages
+
+Current packages target `net10.0`. Use the .NET 10 SDK to build the examples.
 
 | Package | What it adds |
 | --- | --- |

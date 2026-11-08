@@ -1,5 +1,7 @@
 # Getting started
 
+Current packages target `net10.0`; the examples require the .NET 10 SDK.
+
 ```bash
 dotnet add package Quillwright
 ```
