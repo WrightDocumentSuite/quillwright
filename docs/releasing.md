@@ -13,7 +13,7 @@ hidden commit eligible.
 The five package IDs and their exact dependency graph live in
 [`eng/release-manifest.json`](../eng/release-manifest.json). The manifest also names the stable
 release used by package validation. It must always be the latest version already
-published for all five IDs. The current baseline is 0.2.4. While building release N, keep the
+published for all five IDs. The current baseline is 0.2.5. While building release N, keep the
 baseline at the published N-1; after N is published, update `main` so the baseline becomes N and
 new APIs from that release cannot be removed unnoticed. Do not weaken an API compatibility
 diagnostic just to make the gate green: either restore compatibility or commit a reviewed
