@@ -35,6 +35,9 @@ Notable changes to Quillwright are recorded here. The format follows
 
 ### Fixed
 
+- Linux chart tests check the expected Calibri-to-Carlito substitution, and Arabic shaping tests
+  select a face with the required glyphs even when Liberation Sans is preinstalled on the runner.
+
 - Cancellation regressions no longer depend on millisecond timers that can be starved by parallel
   test execution.
 - NUL separators in `DocumentComparer` are expressed as C# escapes, so Git and Source Link treat

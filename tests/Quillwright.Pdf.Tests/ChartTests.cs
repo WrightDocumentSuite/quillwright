@@ -162,7 +162,7 @@ public sealed class ChartTests
         using Rendered rendered = Rendered.Of(document);
         string content = Encoding.Latin1.GetString(rendered.Document.Pages[0].GetContent());
 
-        Assert.Empty(rendered.Diagnostics);
+        AssertOnlyExpectedPlatformFontDiagnostics(rendered);
         Assert.Contains("Speed", string.Concat(rendered.Lines()), StringComparison.Ordinal);
         Assert.True(content.Split('\n').Count(static line => line == "S") >= 8);
     }
@@ -175,9 +175,18 @@ public sealed class ChartTests
         using Rendered rendered = Rendered.Of(document);
         string content = Encoding.Latin1.GetString(rendered.Document.Pages[0].GetContent());
 
-        Assert.Empty(rendered.Diagnostics);
+        AssertOnlyExpectedPlatformFontDiagnostics(rendered);
         Assert.Equal(2, content.Split('\n').Count(static line => line == "f"));
     }
+
+    private static void AssertOnlyExpectedPlatformFontDiagnostics(Rendered rendered) =>
+        Assert.All(rendered.Diagnostics, warning =>
+        {
+            Assert.True(OperatingSystem.IsLinux(), warning.Message);
+            Assert.Equal(PdfExportWarningKind.FontSubstituted, warning.Kind);
+            Assert.Equal("Calibri", warning.Subject);
+            Assert.Contains("'Carlito'", warning.Message, StringComparison.Ordinal);
+        });
 
     [Fact]
     public async Task AChartOfAKindThatCannotBeDrawn_KeepsItsSpaceAndSaysSo()

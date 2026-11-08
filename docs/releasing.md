@@ -52,12 +52,13 @@ SDK is fixed at 10.0.403 with roll-forward disabled; workflows install it from `
 PDF pagination and glyph assertions depend on font metrics, so a bare Linux SDK image is not a
 valid test environment. Before every Ubuntu job that runs PDF tests or the packed PDF smoke, CI
 runs [`eng/install-linux-fonts.sh`](../eng/install-linux-fonts.sh). It installs and verifies the
-same deliberately small Noble font inventory on every runner: metric-compatible Carlito/Caladea
-and DejaVu. Quillwright indexes font files itself by their internal family names rather than asking
-Fontconfig to choose a face, and there is no per-glyph fallback inside a selected face. Liberation
-Sans is therefore intentionally absent: it would win the Arial substitution before DejaVu Sans
-but lacks the Arabic presentation forms exercised by the RTL suite. Installing unrelated Noto or
-STIX faces would not repair a run after a different face has already been selected. Tests that
+required Noble font inventory on every runner: metric-compatible Carlito/Caladea
+and DejaVu. Quillwright indexes font files by internal family names, and there is no
+per-glyph fallback inside a selected face. Runners can already contain Liberation Sans,
+which wins the Arial substitution but lacks the Arabic presentation forms used in the
+shaping assertion. That assertion explicitly selects DejaVu Sans on Linux. Chart assertions
+accept only the expected Calibri-to-Carlito font diagnostic; content diagnostics still fail.
+Tests that
 truly depend on Microsoft glyphs or metrics remain an explicit Windows gate rather than a Linux
 exclusion hidden in the test code. Package versions follow Ubuntu 24.04 servicing updates and are
 logged by the script; this is environment normalization, not a claim of byte-identical fonts

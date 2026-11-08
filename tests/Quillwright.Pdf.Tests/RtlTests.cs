@@ -89,7 +89,9 @@ public sealed class RtlTests
     public void ArabicIsJoinedIntoItsLetterforms()
     {
         WordDocument document = WordDocument.Create();
-        Rtl(document, "\u0627\u0644\u0633\u0644\u0627\u0645");
+        // Linux runners may already contain Liberation Sans, whose Arial-compatible metrics
+        // do not include these presentation forms. This test exercises shaping with a capable face.
+        Rtl(document, "\u0627\u0644\u0633\u0644\u0627\u0645", OperatingSystem.IsLinux() ? "DejaVu Sans" : "Arial");
 
         using Rendered rendered = Rendered.Of(document);
         IReadOnlyList<PdfLetter> letters = rendered.Letters();

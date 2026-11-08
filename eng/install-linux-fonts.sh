@@ -26,10 +26,10 @@ run_as_root() {
     sudo "$@"
 }
 
-# Carlito and Caladea preserve the metrics of the Office defaults. DejaVu is the first installed
-# Arial substitute in this deliberately small inventory and carries the Arabic presentation forms
-# exercised by the RTL suite. Do not add Liberation ahead of it without re-running those tests:
-# Noble's Liberation Sans lacks those glyphs, and FontMap intentionally has no per-glyph fallback.
+# Carlito and Caladea preserve Office-default metrics. DejaVu supplies the Arabic
+# presentation forms used by shaping tests. An existing runner can have other faces;
+# tests of glyph shaping select a capable face explicitly rather than depending on
+# the host's complete Arial substitution chain.
 packages=(
     fonts-crosextra-caladea
     fonts-crosextra-carlito
