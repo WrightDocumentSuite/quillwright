@@ -119,6 +119,44 @@ public class DocPictureTests
     }
 
     [Fact]
+    public void APicturesNameAndAlternativeText_SurviveTheRoundTrip()
+    {
+        WordDocument document = WordDocument.Create();
+        var paragraph = new Paragraph();
+        Picture picture = paragraph.AppendPicture(Png());
+        picture.Name = "Логотип";
+        picture.Description = "Схема проверки\nвторая строка";
+        Add(document, paragraph);
+
+        Picture reopened = Pictures(RoundTrip(document)).Single();
+
+        Assert.Equal("Логотип", reopened.Name);
+        Assert.Equal("Схема проверки\nвторая строка", reopened.Description);
+    }
+
+    [Fact]
+    public void TheSameImageWithItsOwnTextOrSize_KeepsThemApart()
+    {
+        ImageData image = Png();
+        WordDocument document = WordDocument.Create();
+        var paragraph = new Paragraph();
+        paragraph.AppendPicture(image).Description = "first";
+        paragraph.AppendText(" and ");
+        paragraph.AppendPicture(image).Description = "second";
+        paragraph.AppendText(" and ");
+        paragraph.AppendPicture(image, Length.FromCentimeters(2), Length.FromCentimeters(1));
+        Add(document, paragraph);
+
+        List<Picture> reopened = Pictures(RoundTrip(document));
+
+        Assert.Equal("first", reopened[0].Description);
+        Assert.Equal("second", reopened[1].Description);
+        Assert.Null(reopened[2].Description);
+        Assert.Equal(Length.FromCentimeters(2).Twips, reopened[2].Width.Twips);
+        Assert.NotEqual(Length.FromCentimeters(2).Twips, reopened[0].Width.Twips);
+    }
+
+    [Fact]
     public void PicturesCanBeTurnedOff()
     {
         WordDocument document = WordDocument.Create();

@@ -156,6 +156,44 @@ public class HtmlImportTests
     }
 
     [Fact]
+    public void ACollapsedSpace_KeepsTheFormattingOfTheTextItCameFrom()
+    {
+        Paragraph paragraph = HtmlImporter.Import(
+            "<p>\u0438 <u>\u043F\u0440\u043E\u0432\u0435\u0440\u044F\u0435\u0442</u> <b>\u0436\u0438\u0440\u043D\u043E </b> <i>\u043A\u0443\u0440\u0441\u0438\u0432</i>,<u> \u0432\u043D\u0443\u0442\u0440\u0438</u></p>").Document.Paragraphs.Single();
+
+        Assert.Equal("\u0438 \u043F\u0440\u043E\u0432\u0435\u0440\u044F\u0435\u0442 \u0436\u0438\u0440\u043D\u043E \u043A\u0443\u0440\u0441\u0438\u0432, \u0432\u043D\u0443\u0442\u0440\u0438", paragraph.Text);
+        Assert.Null(SpaceAfter(paragraph, "\u0438").Underline);
+        Assert.Equal(UnderlineStyle.Single, RunAt(paragraph, "\u043F\u0440\u043E\u0432\u0435\u0440\u044F\u0435\u0442").Underline);
+        Assert.Null(SpaceAfter(paragraph, "\u043F\u0440\u043E\u0432\u0435\u0440\u044F\u0435\u0442").Underline);
+        Assert.True(SpaceAfter(paragraph, "\u0436\u0438\u0440\u043D\u043E").Bold);
+        Assert.Null(SpaceAfter(paragraph, "\u0436\u0438\u0440\u043D\u043E").Italic);
+        Assert.Equal(UnderlineStyle.Single, SpaceAfter(paragraph, ",").Underline);
+
+        static RunFormat SpaceAfter(Paragraph paragraph, string text)
+        {
+            int at = paragraph.Text.IndexOf(text, StringComparison.Ordinal) + text.Length;
+            Assert.Equal(' ', paragraph.Text[at]);
+            return paragraph.FormatAtOffset(at);
+        }
+    }
+
+    [Fact]
+    public void ASpaceBeforeALinkOrAnObject_StaysOutsideTheLinkAndIsKept()
+    {
+        const string Png =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+        Paragraph paragraph = HtmlImporter.Import(
+            $"<p>see <a href=\"https://example.org\">the spec</a> and<a href=\"#x\"> this</a> " +
+            $"<img src=\"data:image/png;base64,{Png}\" alt=\"dot\"> end <a id=\"x\"></a></p>").Document.Paragraphs.Single();
+
+        Assert.Equal($"see the spec and this {InlineObject.Placeholder} end", paragraph.Text);
+        Assert.Equal(
+            ["the spec", " this"],
+            paragraph.Ranges.Where(static r => r.Range is Hyperlink).Select(r => paragraph.Text.Substring(r.Start, r.Length)).ToArray());
+    }
+
+    [Fact]
     public void TemplateIsInertAndNoscriptIsVisibleWhenScriptingIsDisabled()
     {
         HtmlImportResult result = HtmlImporter.Import(
@@ -357,15 +395,34 @@ public class HtmlImportTests
     }
 
     [Fact]
-    public void HtmlFileEncoding_LargeDecodeHonorsCancellation()
+    public void HtmlFileEncoding_DecodeObservesCancellationAfterOneChunk()
     {
-        byte[] bytes = GC.AllocateUninitializedArray<byte>(32 * 1024 * 1024);
+        const int ChunkSize = 32 * 1024;
+        byte[] bytes = GC.AllocateUninitializedArray<byte>(ChunkSize * 3);
         bytes.AsSpan().Fill((byte)'a');
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken);
-        cancellation.CancelAfter(TimeSpan.FromMilliseconds(1));
+        int observedPosition = -1;
 
-        Assert.ThrowsAny<OperationCanceledException>(() => HtmlEncoding.Decode(bytes, cancellation.Token));
+        Assert.ThrowsAny<OperationCanceledException>(() => HtmlEncoding.Decode(
+            bytes,
+            int.MaxValue,
+            cancellation.Token,
+            position =>
+            {
+                if (cancellation.IsCancellationRequested)
+                {
+                    throw new InvalidOperationException(
+                        "The decoder advanced to another chunk after cancellation.");
+                }
+
+                if (position < ChunkSize)
+                    return;
+
+                observedPosition = position;
+                cancellation.Cancel();
+            }));
+        Assert.Equal(ChunkSize, observedPosition);
     }
 
     [Fact]

@@ -8,7 +8,7 @@ namespace Quillwright.Pdf.Render;
 /// <summary>Turns laid-out Word comment references into interactive PDF annotation threads.</summary>
 internal sealed class CommentRenderer
 {
-    private const string _resolvedMessage =
+    private const string ResolvedMessage =
         "Resolved in the source Word document; resolver identity and time are unavailable.";
 
     private readonly PdfExportContext _context;
@@ -148,7 +148,7 @@ internal sealed class CommentRenderer
         if (!source.IsResolved)
             return;
 
-        PdfTextAnnotation information = target.Reply(_resolvedMessage);
+        PdfTextAnnotation information = target.Reply(ResolvedMessage);
 
         // Reply() inherits the parent author and AddNote() supplies current timestamps. Neither is
         // resolution provenance: Word records only the done flag. PDF 32000-1 §12.5.6.3 requires

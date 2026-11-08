@@ -35,7 +35,14 @@ internal static class HtmlEncoding
     public static string Decode(
         ReadOnlySpan<byte> bytes,
         int maxCharacters,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        Decode(bytes, maxCharacters, cancellationToken, cancellationCheckpoint: null);
+
+    internal static string Decode(
+        ReadOnlySpan<byte> bytes,
+        int maxCharacters,
+        CancellationToken cancellationToken,
+        Action<int>? cancellationCheckpoint)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxCharacters, 1);
         cancellationToken.ThrowIfCancellationRequested();
@@ -64,14 +71,16 @@ internal static class HtmlEncoding
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return DecodeInChunks(bytes[preambleLength..], encoding, maxCharacters, cancellationToken);
+        return DecodeInChunks(
+            bytes[preambleLength..], encoding, maxCharacters, cancellationToken, cancellationCheckpoint);
     }
 
     private static string DecodeInChunks(
         ReadOnlySpan<byte> bytes,
         Encoding encoding,
         int maxCharacters,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<int>? cancellationCheckpoint)
     {
         const int ByteChunkSize = 32 * 1024;
         if (bytes.IsEmpty)
@@ -86,6 +95,7 @@ internal static class HtmlEncoding
             int position = 0;
             while (position < bytes.Length)
             {
+                cancellationCheckpoint?.Invoke(position);
                 cancellationToken.ThrowIfCancellationRequested();
                 int byteCount = Math.Min(ByteChunkSize, bytes.Length - position);
                 bool flush = position + byteCount == bytes.Length;

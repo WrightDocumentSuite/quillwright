@@ -105,6 +105,14 @@ internal sealed partial class ChartLayouter
                 Pie(layout, chart, plot, chart.Kind == ChartKind.Doughnut);
                 return;
 
+            case ChartKind.Radar:
+                Radar(layout, chart, style, plot);
+                return;
+
+            case ChartKind.Bubble:
+                Bubbles(layout, chart, style, plot);
+                return;
+
             default:
                 Report("A chart of this kind is not drawn; its space is left blank.", chart.Kind);
                 return;

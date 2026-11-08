@@ -133,11 +133,11 @@ internal sealed class DocumentMerger
                 return CopyParagraph(paragraph);
 
             case Table table:
-            {
-                var copy = (Table)table.Clone();
-                FixTable(copy);
-                return copy;
-            }
+                {
+                    var copy = (Table)table.Clone();
+                    FixTable(copy);
+                    return copy;
+                }
 
             case RawBlock raw when LeansOnPackage(raw.Xml):
                 Leave("a preserved block that points into the source package by relationship id");
@@ -151,34 +151,34 @@ internal sealed class DocumentMerger
                 return null;
 
             case AlternateContentBlock alternate:
-            {
-                var copy = new AlternateContentBlock(alternate.Prefix, alternate.Suffix);
-                CopyBlocks(alternate.Blocks, copy.Blocks);
-                return copy;
-            }
+                {
+                    var copy = new AlternateContentBlock(alternate.Prefix, alternate.Suffix);
+                    CopyBlocks(alternate.Blocks, copy.Blocks);
+                    return copy;
+                }
 
             case BlockContentControl control:
-            {
-                var copy = new BlockContentControl
                 {
-                    Tag = control.Tag,
-                    Alias = control.Alias,
-                    Id = control.Id,
-                    PropertiesXml = control.PropertiesXml,
-                    EndPropertiesXml = control.EndPropertiesXml,
-                };
+                    var copy = new BlockContentControl
+                    {
+                        Tag = control.Tag,
+                        Alias = control.Alias,
+                        Id = control.Id,
+                        PropertiesXml = control.PropertiesXml,
+                        EndPropertiesXml = control.EndPropertiesXml,
+                    };
 
-                CopyBlocks(control.Blocks, copy.Blocks);
-                return copy;
-            }
+                    CopyBlocks(control.Blocks, copy.Blocks);
+                    return copy;
+                }
 
             default:
-            {
-                Block copy = block.Clone();
-                if (copy is Paragraph cloned)
-                    FixParagraph(cloned);
-                return copy;
-            }
+                {
+                    Block copy = block.Clone();
+                    if (copy is Paragraph cloned)
+                        FixParagraph(cloned);
+                    return copy;
+                }
         }
     }
 
@@ -257,43 +257,43 @@ internal sealed class DocumentMerger
         switch (value)
         {
             case NoteReference note:
-            {
-                if (CopyNote(note.Id, note.IsEndnote) is not { } id)
                 {
-                    Leave(note.IsEndnote ? "an endnote reference with no endnote behind it" : "a footnote reference with no footnote behind it");
-                    return null;
+                    if (CopyNote(note.Id, note.IsEndnote) is not { } id)
+                    {
+                        Leave(note.IsEndnote ? "an endnote reference with no endnote behind it" : "a footnote reference with no footnote behind it");
+                        return null;
+                    }
+
+                    return new NoteReference { IsEndnote = note.IsEndnote, Id = id, CustomMark = note.CustomMark };
                 }
 
-                return new NoteReference { IsEndnote = note.IsEndnote, Id = id, CustomMark = note.CustomMark };
-            }
-
             case CommentReference comment:
-            {
-                if (CopyComment(comment.Id) is not { } id)
-                    return null;
+                {
+                    if (CopyComment(comment.Id) is not { } id)
+                        return null;
 
-                return new CommentReference { Id = id };
-            }
+                    return new CommentReference { Id = id };
+                }
 
             case Picture picture:
-            {
-                _target.Media.Add(picture.Image);
-                return new Picture
                 {
-                    Image = picture.Image,
-                    Width = picture.Width,
-                    Height = picture.Height,
-                    Name = picture.Name,
-                    Description = picture.Description,
-                    IsInline = picture.IsInline,
-                    Anchor = picture.Anchor,
-                    OriginalXml = picture.OriginalXml,
+                    _target.Media.Add(picture.Image);
+                    return new Picture
+                    {
+                        Image = picture.Image,
+                        Width = picture.Width,
+                        Height = picture.Height,
+                        Name = picture.Name,
+                        Description = picture.Description,
+                        IsInline = picture.IsInline,
+                        Anchor = picture.Anchor,
+                        OriginalXml = picture.OriginalXml,
 
-                    // Dirty makes the writer regenerate or rewrite the markup, which is what
-                    // repoints the image relationship at the target's own media part.
-                    IsDirty = true,
-                };
-            }
+                        // Dirty makes the writer regenerate or rewrite the markup, which is what
+                        // repoints the image relationship at the target's own media part.
+                        IsDirty = true,
+                    };
+                }
 
             case Shape shape:
                 return CopyShape(shape);
@@ -303,17 +303,17 @@ internal sealed class DocumentMerger
                 return null;
 
             case AlternateContent alternate:
-            {
-                if (LeansOnPackage(alternate.Prefix) || LeansOnPackage(alternate.Suffix))
                 {
-                    Leave("a compatibility fragment whose markup points into the source package");
-                    return null;
-                }
+                    if (LeansOnPackage(alternate.Prefix) || LeansOnPackage(alternate.Suffix))
+                    {
+                        Leave("a compatibility fragment whose markup points into the source package");
+                        return null;
+                    }
 
-                return CopyObject(alternate.Content) is { } inner
-                    ? new AlternateContent(alternate.Prefix, inner, alternate.Suffix)
-                    : null;
-            }
+                    return CopyObject(alternate.Content) is { } inner
+                        ? new AlternateContent(alternate.Prefix, inner, alternate.Suffix)
+                        : null;
+                }
 
             case RawInline raw when LeansOnPackage(raw.Xml):
                 Leave("a preserved fragment that points into the source package by relationship id");

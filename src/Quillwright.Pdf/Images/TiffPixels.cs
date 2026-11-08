@@ -41,25 +41,25 @@ internal static class TiffPixels
         switch (layout.Photometric)
         {
             case 2:
-            {
-                uint red = (uint)Sample(row, at, layout.Bits);
-                uint green = (uint)Sample(row, at + 1, layout.Bits);
-                uint blue = (uint)Sample(row, at + 2, layout.Bits);
-                return (red << 16) | (green << 8) | blue;
-            }
+                {
+                    uint red = (uint)Sample(row, at, layout.Bits);
+                    uint green = (uint)Sample(row, at + 1, layout.Bits);
+                    uint blue = (uint)Sample(row, at + 2, layout.Bits);
+                    return (red << 16) | (green << 8) | blue;
+                }
 
             case 3:
                 return FromPalette(layout.Palette, Sample(row, at, layout.Bits), maximum + 1);
 
             default:
-            {
-                int value = Sample(row, at, layout.Bits) * 255 / Math.Max(maximum, 1);
+                {
+                    int value = Sample(row, at, layout.Bits) * 255 / Math.Max(maximum, 1);
 
-                // Photometric zero counts up from white, which is the fax convention and the
-                // reason a scanned page comes out inverted when it is ignored.
-                uint grey = (uint)(layout.Photometric == 0 ? 255 - value : value);
-                return (grey << 16) | (grey << 8) | grey;
-            }
+                    // Photometric zero counts up from white, which is the fax convention and the
+                    // reason a scanned page comes out inverted when it is ignored.
+                    uint grey = (uint)(layout.Photometric == 0 ? 255 - value : value);
+                    return (grey << 16) | (grey << 8) | grey;
+                }
         }
     }
 

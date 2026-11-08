@@ -331,7 +331,10 @@ public static class HtmlImporter
 
     private static void CollectNotes(HtmlElement root, ImportContext context)
     {
-        HtmlNoteDiscovery discovery = DiscoverNoteShapes(root, context.CancellationToken);
+        HtmlNoteDiscovery discovery = DiscoverNoteShapes(
+            root,
+            context.CancellationToken,
+            context.Options.NoteDiscoveryCancellationCheckpoint);
         var definitionsByLabel = new Dictionary<string, List<HtmlNoteDefinition>>(StringComparer.Ordinal);
         var definitionsByElement = new Dictionary<HtmlElement, HtmlNoteDefinition>(ReferenceEqualityComparer.Instance);
         var definitionsByPair = new Dictionary<HtmlNotePairKey, HtmlNoteDefinition>();
@@ -486,7 +489,10 @@ public static class HtmlImporter
         }
     }
 
-    private static HtmlNoteDiscovery DiscoverNoteShapes(HtmlElement root, CancellationToken cancellationToken)
+    private static HtmlNoteDiscovery DiscoverNoteShapes(
+        HtmlElement root,
+        CancellationToken cancellationToken,
+        Action<int>? cancellationCheckpoint)
     {
         var discovery = new HtmlNoteDiscovery();
         var pending = new Stack<(
@@ -495,10 +501,18 @@ public static class HtmlImporter
             HtmlNoteSection? FootnotesSection,
             HtmlElement? Definition,
             bool DescendantsSkipped)>();
+        int operations = 0;
+
+        void CheckCancellation()
+        {
+            cancellationCheckpoint?.Invoke(operations++);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
         pending.Push((root, null, null, null, false));
         while (pending.Count > 0)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            CheckCancellation();
             (
                 HtmlElement current,
                 HtmlElement? previousSignificantElement,
@@ -545,7 +559,7 @@ public static class HtmlImporter
             HtmlElement? previous = null;
             foreach (HtmlNode node in current.Children)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                CheckCancellation();
                 if (node is HtmlElement child)
                     children.Add((child, previous, footnotesSection, definition, descendantsSkipped));
 
@@ -906,7 +920,7 @@ public static class HtmlImporter
 
         string referenceStyle = imported.Note.IsEndnote ? "EndnoteReference" : "FootnoteReference";
         context.Document.Styles.GetOrAdd(referenceStyle, StyleKind.Character);
-        target.Open(inherited).AppendObject(
+        target.OpenInline(inherited).AppendObject(
             new NoteReference { IsEndnote = imported.Note.IsEndnote, Id = imported.Note.Id },
             RunFormat.Default with { StyleId = referenceStyle });
         imported.ReferenceCount++;
@@ -1037,11 +1051,28 @@ public static class HtmlImporter
     {
         private Paragraph? _open;
         private bool _pendingSpace;
+        private RunFormat _pendingFormat = RunFormat.Default;
+        private (Paragraph? Paragraph, int Offset) _carriedSpace;
         private bool _numbered;
 
         public IList<Block> Blocks { get; } = blocks;
 
         public bool HasOpenContent => _open is { IsEmpty: false };
+
+        /// <summary>
+        /// Whether the character at <paramref name="offset"/> is a collapsed space carried over
+        /// from the text before it: it belongs to that text, not to a range starting there.
+        /// </summary>
+        public bool IsCarriedSpace(Paragraph paragraph, int offset) =>
+            ReferenceEquals(_carriedSpace.Paragraph, paragraph) && _carriedSpace.Offset == offset;
+
+        /// <summary>Opens the paragraph for an object, which settles a space waiting before it.</summary>
+        public Paragraph OpenInline(in Inherited inherited)
+        {
+            Paragraph paragraph = Open(inherited);
+            SettlePendingSpace(paragraph);
+            return paragraph;
+        }
 
         public Paragraph Open(in Inherited inherited)
         {
@@ -1082,16 +1113,40 @@ public static class HtmlImporter
 
             if (collapsed.Length == 0)
             {
-                _pendingSpace |= (leading || trailing) && HasOpenContent;
+                if (!_pendingSpace && (leading || trailing) && HasOpenContent)
+                    HoldSpace(inherited.Format);
                 return;
             }
 
             Paragraph paragraph = Open(inherited);
-            if ((_pendingSpace || leading) && !paragraph.IsEmpty)
+            if (_pendingSpace)
+                SettlePendingSpace(paragraph);
+            else if (leading && !paragraph.IsEmpty)
                 paragraph.AppendText(" ", inherited.Format);
 
             paragraph.AppendText(collapsed, inherited.Format);
-            _pendingSpace = trailing;
+            if (trailing)
+                HoldSpace(inherited.Format);
+        }
+
+        // Of a run of collapsible spaces the first survives, so the space keeps the formatting of
+        // the text it came from; it is written only once content follows, so a block never ends
+        // with one.
+        private void HoldSpace(RunFormat format)
+        {
+            _pendingSpace = true;
+            _pendingFormat = format;
+        }
+
+        private void SettlePendingSpace(Paragraph paragraph)
+        {
+            if (_pendingSpace && !paragraph.IsEmpty)
+            {
+                _carriedSpace = (paragraph, paragraph.TextLength);
+                paragraph.AppendText(" ", _pendingFormat);
+            }
+
+            _pendingSpace = false;
         }
 
         private void AppendPreformatted(string text, in Inherited inherited)
@@ -1326,6 +1381,9 @@ public static class HtmlImporter
             MapBlocks(element, context, target, WithCss(element, context, inherited));
         }
 
+        if (target.IsCarriedSpace(paragraph, start))
+            start++;
+
         if (href is { Length: > 0 } && paragraph.TextLength > start)
         {
             var link = new Hyperlink { Tooltip = element.Attribute("title") };
@@ -1351,7 +1409,7 @@ public static class HtmlImporter
         }
 
         (Length? width, Length? height) = ImageSize(element);
-        Paragraph paragraph = target.Open(inherited);
+        Paragraph paragraph = target.OpenInline(inherited);
         paragraph.AppendPicture(image);
 
         // AppendPicture sizes from the image itself; an explicit size wins over that.

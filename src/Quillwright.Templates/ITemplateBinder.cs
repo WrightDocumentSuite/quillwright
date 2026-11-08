@@ -25,31 +25,31 @@ public readonly record struct TemplateRows(IReadOnlyList<object> Items, ITemplat
 public interface ITemplateBinder
 {
     /// <summary>The names this binder answers to, used to report placeholders a model cannot fill.</summary>
-    IReadOnlyList<string> Names { get; }
+    public IReadOnlyList<string> Names { get; }
 
     /// <summary>Reads a text value.</summary>
     /// <param name="model">The model instance.</param>
     /// <param name="name">Placeholder name.</param>
     /// <param name="value">The formatted value.</param>
-    bool TryGetText(object model, string name, out string? value);
+    public bool TryGetText(object model, string name, out string? value);
 
     /// <summary>Reads a repeated collection.</summary>
     /// <param name="model">The model instance.</param>
     /// <param name="name">Collection name.</param>
     /// <param name="rows">The items and their binder.</param>
-    bool TryGetRows(object model, string name, out TemplateRows rows);
+    public bool TryGetRows(object model, string name, out TemplateRows rows);
 
     /// <summary>Reads a condition.</summary>
     /// <param name="model">The model instance.</param>
     /// <param name="name">Condition name.</param>
     /// <param name="value">Whether the region is kept.</param>
-    bool TryGetCondition(object model, string name, out bool value);
+    public bool TryGetCondition(object model, string name, out bool value);
 
     /// <summary>Reads a picture.</summary>
     /// <param name="model">The model instance.</param>
     /// <param name="name">Placeholder name.</param>
     /// <param name="image">The picture and its size.</param>
-    bool TryGetImage(object model, string name, out TemplateImage image);
+    public bool TryGetImage(object model, string name, out TemplateImage image);
 }
 
 /// <summary>
@@ -59,5 +59,5 @@ public interface ITemplateBinder
 public interface ITemplateModel
 {
     /// <summary>Reads the members of this model type by name.</summary>
-    static abstract ITemplateBinder TemplateBinder { get; }
+    public abstract static ITemplateBinder TemplateBinder { get; }
 }

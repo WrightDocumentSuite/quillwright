@@ -1,0 +1,175 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version already set in Directory.Build.props (for example, 0.2.5)
+        required: true
+        type: string
+      publish:
+        description: Publish the verified candidate to NuGet.org
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: true
+  NUGET_XMLDOC_MODE: skip
+
+jobs:
+  quality:
+    name: Full tests and coverage
+    if: github.repository == 'WrightDocumentSuite/quillwright'
+    runs-on: windows-2025
+    steps:
+      - name: Check out the selected public ref
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install the pinned .NET feature band
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore Quillwright.slnx
+      - name: Build once before Coverlet instrumentation
+        run: >-
+          dotnet build Quillwright.slnx --configuration Release --no-restore
+          -t:Rebuild -p:ContinuousIntegrationBuild=true
+      - name: Enforce full release coverage threshold
+        shell: pwsh
+        run: ./eng/coverage.ps1 -NoRestore -NoBuild
+      - name: Upload release coverage report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-coverage-${{ github.sha }}
+          path: artifacts/coverage/coverage.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  candidate:
+    name: Build release candidate
+    if: github.repository == 'WrightDocumentSuite/quillwright'
+    needs: quality
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the selected public ref
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the pinned .NET feature band
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Verify pristine public snapshot
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          REQUIRE_VERSION_TAG: ${{ inputs.publish }}
+        run: |
+          $tag = if ($env:REQUIRE_VERSION_TAG -eq 'true') {
+            "v$($env:RELEASE_VERSION)"
+          } else {
+            ''
+          }
+          ./eng/verify-public-snapshot.ps1 -ExpectedTag $tag
+      - name: Install deterministic PDF smoke fonts
+        run: bash ./eng/install-linux-fonts.sh
+      - name: Build and verify release candidate
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          REQUIRE_VERSION_TAG: ${{ inputs.publish }}
+        run: |
+          $arguments = @{
+            ExpectedVersion = $env:RELEASE_VERSION
+            OutputDirectory = 'artifacts/release/packages'
+            NuGetPackagesDirectory = 'artifacts/release/nuget-packages'
+          }
+          if ($env:REQUIRE_VERSION_TAG -eq 'true') {
+            $arguments.RequireVersionTag = $true
+          }
+          $arguments.SkipTests = $true
+          ./eng/release.ps1 @arguments
+      - name: Upload immutable candidate
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: quillwright-${{ inputs.version }}-${{ github.sha }}
+          path: artifacts/release/packages/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish to NuGet.org
+    if: >-
+      inputs.publish &&
+      github.repository == 'WrightDocumentSuite/quillwright' &&
+      github.ref == format('refs/tags/v{0}', inputs.version)
+    needs: candidate
+    runs-on: ubuntu-24.04
+    environment:
+      name: nuget.org
+      url: https://www.nuget.org/profiles/WrightDocumentSuite
+    steps:
+      - name: Check out the exact tagged public snapshot
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the pinned .NET feature band
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Verify pristine tagged snapshot
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: ./eng/verify-public-snapshot.ps1 -ExpectedTag ("v{0}" -f $env:RELEASE_VERSION)
+      - name: Download candidate from this workflow run
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: quillwright-${{ inputs.version }}-${{ github.sha }}
+          path: artifacts/release/packages
+      - name: Re-verify downloaded candidate
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          ./eng/verify-public-snapshot.ps1 `
+            -ExpectedTag ("v{0}" -f $env:RELEASE_VERSION) `
+            -AllowGeneratedArtifacts
+          ./eng/verify-package-checksums.ps1 -PackageDirectory artifacts/release/packages
+          $commit = (git rev-parse HEAD).Trim()
+          dotnet run --project eng/PackageVerifier/PackageVerifier.csproj --configuration Release -- `
+            --package-directory artifacts/release/packages `
+            --version $env:RELEASE_VERSION `
+            --commit $commit `
+            --repository-root . `
+            --manifest eng/release-manifest.json
+          if ($LASTEXITCODE -ne 0) { throw 'Package verification failed.' }
+          ./eng/assert-version-unpublished.ps1 -PackageVersion $env:RELEASE_VERSION
+      - name: Publish packages and matching symbols
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          $packages = @(Get-ChildItem artifacts/release/packages -Filter '*.nupkg' -File |
+            Where-Object { $_.Name -notlike '*.snupkg' } |
+            Sort-Object Name)
+          foreach ($package in $packages) {
+            dotnet nuget push $package.FullName `
+              --api-key $env:NUGET_API_KEY `
+              --source https://api.nuget.org/v3/index.json
+            if ($LASTEXITCODE -ne 0) { throw "Publishing $($package.Name) failed." }
+          }

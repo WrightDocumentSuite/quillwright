@@ -549,4 +549,19 @@ public class MarkdownImportTests
         // The built-in Quote style is italic, and the exporter faithfully says so.
         Assert.Contains("> *Quoted.*", exported, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void OrderedListStartingPastOne_PreservesStartOverrideAndRoundTripsToMarkdown()
+    {
+        MarkdownImportResult imported = MarkdownImporter.Import("4. Fourth\n5. Fifth");
+
+        NumberingInstance instance = Assert.Single(imported.Document.Numbering.Instances);
+        NumberingLevelOverride levelOverride = Assert.Single(instance.Overrides);
+        Assert.Equal(0, levelOverride.Level);
+        Assert.Equal(4, levelOverride.StartOverride);
+
+        string exported = imported.Document.ToMarkdown().Text;
+        Assert.Contains("4. Fourth", exported, StringComparison.Ordinal);
+        Assert.Contains("5. Fifth", exported, StringComparison.Ordinal);
+    }
 }

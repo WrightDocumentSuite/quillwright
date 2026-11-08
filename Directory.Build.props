@@ -6,7 +6,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <Deterministic>true</Deterministic>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(RestoreLockedMode)' == '' and ('$(ContinuousIntegrationBuild)' == 'true' or '$(CI)' == 'true')">true</RestoreLockedMode>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>moderate</NuGetAuditLevel>
     <UseArtifactsOutput>true</UseArtifactsOutput>
     <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
     <InvariantGlobalization>false</InvariantGlobalization>
@@ -17,7 +22,7 @@
     <Authors>Pavel Deecalov</Authors>
     <Copyright>Copyright 2026 Pavel Deecalov</Copyright>
     <Product>Quillwright</Product>
-    <Version>0.2.4</Version>
+    <Version>0.2.5</Version>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/WrightDocumentSuite/quillwright.git</RepositoryUrl>
@@ -29,9 +34,10 @@
   <!--
     Source Link ships in the SDK, so a stack trace from a released package can be stepped back
     into the commit it was built from. The symbols travel as a separate .snupkg rather than
-    inside the package, which is what nuget.org indexes. This is deliberately unconditional:
-    a project sets IsPackable in its own file, which is evaluated after this one, so a
-    condition on it here would never be true.
+    inside the package, which is what nuget.org indexes. These property defaults are deliberately
+    unconditional: at this point in property evaluation IsPackable still has the false default
+    above, before a package project overrides it. Item conditions are evaluated later and can use
+    the final IsPackable value, as the README item below does.
   -->
   <PropertyGroup Label="Debugging a released build">
     <PublishRepositoryUrl>true</PublishRepositoryUrl>

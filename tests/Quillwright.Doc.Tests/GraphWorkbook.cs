@@ -39,6 +39,8 @@ internal sealed class GraphWorkbook
     private const ushort Trendline = 0x104B;
     private const ushort DataReference = 0x1051;
     private const ushort Orientation = 0x1055;
+    private const ushort SeriesIndex = 0x1065;
+    private const ushort BiffNumber = 0x0203;
 
     private readonly List<byte> _stream = [];
     private readonly List<(int Row, int Column, object Value)> _cells = [];
@@ -212,6 +214,38 @@ internal sealed class GraphWorkbook
         _stream.AddRange(Sixteen(type));
         _stream.AddRange(Sixteen(body.Length));
         _stream.AddRange(body);
+    }
+
+    public static byte[] BuildExcelCachedChart(string seriesName, string[] categories, double[] values)
+    {
+        var wb = new GraphWorkbook();
+        wb.Record(BeginOfFile, [.. Sixteen(0x0600), .. Sixteen(0x0020), .. Sixteen(0), .. Sixteen(0x07CD)]);
+        wb.Record(Chart, new byte[16]);
+        wb.Record(Begin, []);
+        wb.Record(Series, [.. Sixteen(1), .. Sixteen(1), .. Sixteen(categories.Length), .. Sixteen(values.Length), .. Sixteen(1), .. Sixteen(0)]);
+        wb.Record(Begin, []);
+        wb.Record(SeriesText, [.. Sixteen(0), .. ShortString(seriesName)]);
+        wb.Record(DataReference, [1, 2, .. Sixteen(0), .. Sixteen(0), .. Sixteen(0)]);
+        wb.Record(DataReference, [2, 2, .. Sixteen(0), .. Sixteen(0), .. Sixteen(0)]);
+        wb.Record(End, []);
+        wb.Record(BarGroup, new byte[6]);
+        wb.Record(SeriesIndex, Sixteen(2));
+        for (int i = 0; i < categories.Length; i++)
+            wb.Record(Label, [.. Sixteen(i), .. Sixteen(0), .. Sixteen(0), .. Sixteen(categories[i].Length), 1, .. Encoding.Unicode.GetBytes(categories[i])]);
+
+        wb.Record(SeriesIndex, Sixteen(1));
+        for (int i = 0; i < values.Length; i++)
+        {
+            var number = new byte[8];
+            BinaryPrimitives.WriteDoubleLittleEndian(number, values[i]);
+            wb.Record(BiffNumber, [.. Sixteen(i), .. Sixteen(0), .. Sixteen(0), .. number]);
+        }
+
+        wb.Record(End, []);
+        wb.Record(EndOfFile, []);
+        var container = new CompoundFileWriter();
+        container.Add("Workbook", [.. wb._stream]);
+        return container.Build();
     }
 
     /// <summary>One series as the fixture was asked for it.</summary>

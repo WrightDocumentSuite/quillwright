@@ -9,7 +9,7 @@ using Quillwright.Styles;
 
 namespace Quillwright.Rtf.Parsing;
 
-internal sealed class RtfParser
+internal sealed partial class RtfParser
 {
     private readonly RtfImportOptions _options;
     private readonly CancellationToken _cancellationToken;
@@ -35,6 +35,7 @@ internal sealed class RtfParser
     private string? _pendingAnnotationId;
     private string? _pendingAnnotationAuthor;
     private RtfAnnotationTime? _activeAnnotationTime;
+    private RtfAnnotationTime? _activeInfoTime;
     private RtfAnnotationTime? _pendingAnnotationTime;
     private RtfAnnotationBuilder? _activeAnnotation;
 
@@ -101,11 +102,12 @@ internal sealed class RtfParser
 
                     savedStates[depth] = state;
                     depth++;
+                    Paragraph activeParagraph = CurrentParagraph(state);
                     frames[depth] = new RtfGroupFrame
                     {
                         IsUnicodeAlternative = unicodeAlternative,
-                        StartParagraph = _paragraph,
-                        StartOffset = _paragraph.TextLength,
+                        StartParagraph = activeParagraph,
+                        StartOffset = activeParagraph.TextLength,
                     };
                     state.Skip = skip;
                     state.AtGroupStart = true;
@@ -132,7 +134,10 @@ internal sealed class RtfParser
                 case RtfTokenKind.Text:
                     if (depth == 0)
                         throw new RtfFormatException("Document text appears outside the root group", token.Offset);
-                    AppendEncoded(tokenizer.Slice(token), ref state);
+                    if (!state.Skip && state.Destination == RtfDestination.Picture)
+                        AppendPictureHex(tokenizer.Slice(token), token.Offset);
+                    else
+                        AppendEncoded(tokenizer.Slice(token), ref state);
                     state.AtGroupStart = false;
                     break;
 
@@ -153,6 +158,8 @@ internal sealed class RtfParser
 
                 case RtfTokenKind.Binary:
                     FlushEncodedText(state);
+                    if (!state.Skip && state.Destination == RtfDestination.Picture)
+                        AppendPictureBinary(tokenizer.Slice(token), token.Offset);
                     if (state.FallbackCharactersToSkip > 0)
                         state.FallbackCharactersToSkip--;
                     state.AtGroupStart = false;
@@ -166,7 +173,10 @@ internal sealed class RtfParser
         if (depth != 0)
             throw new RtfFormatException("The root RTF group is not closed", input.Length);
 
+        FlushPendingTableContent(state);
         CommitParagraph(force: false, state);
+        FinalizeStyles();
+        FinalizeNumbering();
         ImportAnnotations();
         return new RtfImportResult(_document, _diagnostics);
     }
@@ -299,18 +309,169 @@ internal sealed class RtfParser
                 CaptureAnnotationTime(token, state);
                 break;
             case RtfKeyword.StyleSheet:
+                if (atGroupStart)
+                {
+                    BeginDestination(RtfDestination.StyleSheet, token, ref state, frames, depth);
+                    state.StarDestination = false;
+                }
+                break;
+            case RtfKeyword.ParagraphStyle:
+            case RtfKeyword.CharacterStyle:
+            case RtfKeyword.SectionStyle:
+            case RtfKeyword.TableStyle:
+            case RtfKeyword.StyleBasedOn:
+            case RtfKeyword.StyleNext:
+            case RtfKeyword.StyleLink:
+            case RtfKeyword.StylePriority:
+            case RtfKeyword.StyleQuickFormat:
+            case RtfKeyword.StyleHidden:
+            case RtfKeyword.StyleSemiHidden:
+            case RtfKeyword.StyleUnhideUsed:
+                ApplyStyleControl(token, atGroupStart, ref state, frames, depth);
+                break;
+            case RtfKeyword.BookmarkStart:
+                if (atGroupStart)
+                {
+                    BeginDestination(RtfDestination.BookmarkStart, token, ref state, frames, depth);
+                    state.StarDestination = false;
+                }
+                break;
+            case RtfKeyword.BookmarkEnd:
+                if (atGroupStart)
+                {
+                    BeginDestination(RtfDestination.BookmarkEnd, token, ref state, frames, depth);
+                    state.StarDestination = false;
+                }
+                break;
             case RtfKeyword.Info:
+                if (atGroupStart)
+                {
+                    BeginDestination(RtfDestination.Info, token, ref state, frames, depth);
+                    state.StarDestination = false;
+                }
+                break;
+            case RtfKeyword.Title when atGroupStart && state.Destination == RtfDestination.Info:
+                BeginDestination(RtfDestination.InfoTitle, token, ref state, frames, depth);
+                state.StarDestination = false;
+                break;
+            case RtfKeyword.Subject when atGroupStart && state.Destination == RtfDestination.Info:
+                BeginDestination(RtfDestination.InfoSubject, token, ref state, frames, depth);
+                state.StarDestination = false;
+                break;
+            case RtfKeyword.Author when atGroupStart && state.Destination == RtfDestination.Info:
+                BeginDestination(RtfDestination.InfoAuthor, token, ref state, frames, depth);
+                state.StarDestination = false;
+                break;
+            case RtfKeyword.Operator when atGroupStart && state.Destination == RtfDestination.Info:
+                BeginDestination(RtfDestination.InfoOperator, token, ref state, frames, depth);
+                state.StarDestination = false;
+                break;
+            case RtfKeyword.Keywords when atGroupStart && state.Destination == RtfDestination.Info:
+                BeginDestination(RtfDestination.InfoKeywords, token, ref state, frames, depth);
+                state.StarDestination = false;
+                break;
+            case RtfKeyword.DocComment when atGroupStart && state.Destination == RtfDestination.Info:
+                BeginDestination(RtfDestination.InfoDocComment, token, ref state, frames, depth);
+                state.StarDestination = false;
+                break;
+            case RtfKeyword.Category when atGroupStart && state.Destination == RtfDestination.Info:
+                BeginDestination(RtfDestination.InfoCategory, token, ref state, frames, depth);
+                state.StarDestination = false;
+                break;
+            case RtfKeyword.Version when state.Destination == RtfDestination.Info && token.HasParameter:
+                _document.Properties.Revision = token.Parameter.ToString(CultureInfo.InvariantCulture);
+                break;
+            case RtfKeyword.CreationTime when atGroupStart && state.Destination == RtfDestination.Info:
+                BeginDestination(RtfDestination.InfoCreationTime, token, ref state, frames, depth);
+                state.StarDestination = false;
+                _activeInfoTime = new RtfAnnotationTime(token.Offset);
+                break;
+            case RtfKeyword.RevisionTime when atGroupStart && state.Destination == RtfDestination.Info:
+                BeginDestination(RtfDestination.InfoRevisionTime, token, ref state, frames, depth);
+                state.StarDestination = false;
+                _activeInfoTime = new RtfAnnotationTime(token.Offset);
+                break;
             case RtfKeyword.Generator:
             case RtfKeyword.ThemeData:
-            case RtfKeyword.ListTable:
-            case RtfKeyword.ListOverrideTable:
+            case RtfKeyword.NonShapePicture:
+            case RtfKeyword.ListText:
+            case RtfKeyword.PnText:
+            case RtfKeyword.Pn:
+            case RtfKeyword.ListName:
+            case RtfKeyword.LevelNumbers:
                 if (atGroupStart)
                     state.Skip = true;
                 break;
+            case RtfKeyword.ShapePicture:
+                if (atGroupStart)
+                    state.StarDestination = false;
+                break;
+            case RtfKeyword.ListTable:
+                if (atGroupStart)
+                {
+                    BeginDestination(RtfDestination.ListTable, token, ref state, frames, depth);
+                    state.StarDestination = false;
+                }
+                break;
+            case RtfKeyword.ListOverrideTable:
+                if (atGroupStart)
+                {
+                    BeginDestination(RtfDestination.ListOverrideTable, token, ref state, frames, depth);
+                    state.StarDestination = false;
+                }
+                break;
+            case RtfKeyword.List:
+            case RtfKeyword.ListId:
+            case RtfKeyword.ListTemplateId:
+            case RtfKeyword.ListSimple:
+            case RtfKeyword.ListHybrid:
+            case RtfKeyword.ListLevel:
+            case RtfKeyword.LevelNumberFormat:
+            case RtfKeyword.LevelNumberFormatN:
+            case RtfKeyword.LevelJustification:
+            case RtfKeyword.LevelJustificationN:
+            case RtfKeyword.LevelStartAt:
+            case RtfKeyword.LevelText:
+            case RtfKeyword.ListOverride:
+            case RtfKeyword.ListOverrideCount:
+            case RtfKeyword.ListOverrideLevel:
+            case RtfKeyword.ListOverrideStartAt:
+            case RtfKeyword.ListStyleId:
+            case RtfKeyword.ListLevelIndex:
+                ApplyListControl(token, atGroupStart, ref state, frames, depth);
+                break;
             case RtfKeyword.Picture:
-            case RtfKeyword.AnnotationIcon:
-            case RtfKeyword.Object:
+                if (atGroupStart)
+                    BeginPicture(token, ref state, frames, depth);
+                break;
+            case RtfKeyword.PngBlip:
+            case RtfKeyword.JpegBlip:
+            case RtfKeyword.EmfBlip:
+            case RtfKeyword.WmfBlip:
+            case RtfKeyword.PictureWidth:
+            case RtfKeyword.PictureHeight:
+            case RtfKeyword.PictureWidthGoal:
+            case RtfKeyword.PictureHeightGoal:
+            case RtfKeyword.PictureScaleX:
+            case RtfKeyword.PictureScaleY:
+                ApplyPictureControl(token, state);
+                break;
+            case RtfKeyword.PictureProperties:
+            case RtfKeyword.ShapePropertyName:
+            case RtfKeyword.ShapePropertyValue:
+                if (atGroupStart)
+                    BeginPictureProperty(token, ref state, frames, depth);
+                break;
             case RtfKeyword.Footnote:
+                if (atGroupStart)
+                    BeginNote(token, ref state, frames, depth);
+                break;
+            case RtfKeyword.FootnoteCharacter:
+            case RtfKeyword.Endnote:
+            case RtfKeyword.FootnoteSeparator:
+            case RtfKeyword.FootnoteContinuationSeparator:
+                ApplyNoteControl(token, state);
+                break;
             case RtfKeyword.Header:
             case RtfKeyword.HeaderLeft:
             case RtfKeyword.HeaderRight:
@@ -320,6 +481,104 @@ internal sealed class RtfParser
             case RtfKeyword.FooterRight:
             case RtfKeyword.FooterFirst:
                 if (atGroupStart)
+                    BeginHeaderFooter(token, ref state, frames, depth);
+                break;
+            case RtfKeyword.TitlePage:
+                _section.Properties.DifferentFirstPage = ToggleValue(token);
+                break;
+            case RtfKeyword.TableRowDefaults:
+            case RtfKeyword.InTable:
+            case RtfKeyword.TableNestingLevel:
+            case RtfKeyword.Cell:
+            case RtfKeyword.NestedCell:
+            case RtfKeyword.Row:
+            case RtfKeyword.NestedRow:
+            case RtfKeyword.CellRightBoundary:
+            case RtfKeyword.TableRowHeight:
+            case RtfKeyword.TableRowHeader:
+            case RtfKeyword.TableRowKeep:
+            case RtfKeyword.TableRowAlignLeft:
+            case RtfKeyword.TableRowAlignCenter:
+            case RtfKeyword.TableRowAlignRight:
+            case RtfKeyword.TableRowLeft:
+            case RtfKeyword.CellMergeFirst:
+            case RtfKeyword.CellMerged:
+            case RtfKeyword.CellVerticalMergeFirst:
+            case RtfKeyword.CellVerticalMerged:
+            case RtfKeyword.CellBackgroundColor:
+            case RtfKeyword.CellVerticalAlignTop:
+            case RtfKeyword.CellVerticalAlignCenter:
+            case RtfKeyword.CellVerticalAlignBottom:
+            case RtfKeyword.CellBorderTop:
+            case RtfKeyword.CellBorderLeft:
+            case RtfKeyword.CellBorderBottom:
+            case RtfKeyword.CellBorderRight:
+            case RtfKeyword.RowBorderTop:
+            case RtfKeyword.RowBorderLeft:
+            case RtfKeyword.RowBorderBottom:
+            case RtfKeyword.RowBorderRight:
+            case RtfKeyword.RowBorderHorizontal:
+            case RtfKeyword.RowBorderVertical:
+            case RtfKeyword.ParagraphBorderTop:
+            case RtfKeyword.ParagraphBorderBottom:
+            case RtfKeyword.ParagraphBorderLeft:
+            case RtfKeyword.ParagraphBorderRight:
+            case RtfKeyword.ParagraphBorderBetween:
+            case RtfKeyword.ParagraphBorderBar:
+            case RtfKeyword.ParagraphBorderBox:
+            case RtfKeyword.ParagraphBackgroundColor:
+            case RtfKeyword.BorderSingle:
+            case RtfKeyword.BorderThick:
+            case RtfKeyword.BorderDouble:
+            case RtfKeyword.BorderDotted:
+            case RtfKeyword.BorderDashed:
+            case RtfKeyword.BorderDashSmall:
+            case RtfKeyword.BorderDotDash:
+            case RtfKeyword.BorderDotDotDash:
+            case RtfKeyword.BorderTriple:
+            case RtfKeyword.BorderHairline:
+            case RtfKeyword.BorderWave:
+            case RtfKeyword.BorderNone:
+            case RtfKeyword.BorderNil:
+            case RtfKeyword.BorderWidth:
+            case RtfKeyword.BorderColor:
+            case RtfKeyword.BorderSpace:
+                ApplyTableControl(token, ref state);
+                break;
+            case RtfKeyword.PaperWidth:
+            case RtfKeyword.PaperHeight:
+            case RtfKeyword.MarginLeft:
+            case RtfKeyword.MarginRight:
+            case RtfKeyword.MarginTop:
+            case RtfKeyword.MarginBottom:
+            case RtfKeyword.Gutter:
+            case RtfKeyword.Landscape:
+            case RtfKeyword.SectionPageWidth:
+            case RtfKeyword.SectionPageHeight:
+            case RtfKeyword.SectionMarginLeft:
+            case RtfKeyword.SectionMarginRight:
+            case RtfKeyword.SectionMarginTop:
+            case RtfKeyword.SectionMarginBottom:
+            case RtfKeyword.SectionGutter:
+            case RtfKeyword.HeaderDistance:
+            case RtfKeyword.FooterDistance:
+            case RtfKeyword.SectionLandscape:
+            case RtfKeyword.SectionBreakNone:
+            case RtfKeyword.SectionBreakColumn:
+            case RtfKeyword.SectionBreakPage:
+            case RtfKeyword.SectionBreakEven:
+            case RtfKeyword.SectionBreakOdd:
+            case RtfKeyword.Columns:
+            case RtfKeyword.ColumnSpace:
+            case RtfKeyword.LineBetweenColumns:
+            case RtfKeyword.ColumnNumber:
+            case RtfKeyword.ColumnWidth:
+            case RtfKeyword.ColumnSpaceRight:
+                ApplySectionGeometryControl(token);
+                break;
+            case RtfKeyword.AnnotationIcon:
+            case RtfKeyword.Object:
+                if (atGroupStart)
                 {
                     state.Skip = true;
                     WarnUnsupported(token.Keyword, token.Offset);
@@ -327,12 +586,30 @@ internal sealed class RtfParser
                 break;
             case RtfKeyword.FieldInstruction:
                 if (atGroupStart)
-                    state.Skip = true;
+                {
+                    BeginDestination(RtfDestination.FieldInstruction, token, ref state, frames, depth);
+                    state.StarDestination = false;
+                }
                 break;
             case RtfKeyword.FieldResult:
+                if (atGroupStart && depth > 0)
+                {
+                    frames[depth].OpensDestination = true;
+                    frames[depth].OpenedDestination = RtfDestination.FieldResult;
+                    state.StarDestination = false;
+                }
+                break;
             case RtfKeyword.Field:
-            case RtfKeyword.SectionDefaults:
+                if (atGroupStart)
+                {
+                    _pendingFieldInstruction = null;
+                    state.StarDestination = false;
+                }
+                break;
             case RtfKeyword.Binary:
+                break;
+            case RtfKeyword.SectionDefaults:
+                ResetSectionToDefaults(_section);
                 break;
             case RtfKeyword.DefaultFont when token.HasParameter:
                 _defaultFontIndex = token.Parameter;
@@ -478,6 +755,8 @@ internal sealed class RtfParser
                 state.LineSpacingRaw = 0;
                 state.TabAlignment = TabAlignment.Left;
                 state.TabLeader = TabLeader.None;
+                state.ParagraphBorderTarget = RtfParagraphBorderTarget.None;
+                state.InTable = false;
                 break;
             case RtfKeyword.AlignLeft:
                 state.ParagraphFormat = state.ParagraphFormat with { Alignment = ParagraphAlignment.Left };
@@ -609,7 +888,9 @@ internal sealed class RtfParser
                 {
                     CommitParagraph(force: false, state);
                     AddMarkupNode(token.Offset, "section");
+                    Section previousSection = _section;
                     _section = _document.Sections.Add();
+                    _section.Properties = previousSection.Properties.Clone();
                 }
                 break;
             case RtfKeyword.Line:
@@ -658,7 +939,7 @@ internal sealed class RtfParser
             case RtfKeyword.RightDoubleQuote:
                 AppendSpecial('\u201D', ref state);
                 break;
-            case RtfKeyword.Unknown when atGroupStart && state.StarDestination:
+            case RtfKeyword.Unknown when atGroupStart && (state.StarDestination || state.Destination == RtfDestination.Info):
                 state.Skip = true;
                 break;
         }
@@ -774,12 +1055,53 @@ internal sealed class RtfParser
             return;
         }
 
+        if (state.Destination is RtfDestination.StyleSheet or RtfDestination.StyleEntry)
+        {
+            AppendStyleSheetText(text);
+            return;
+        }
+
+        if (state.Destination == RtfDestination.ListTable ||
+            state.Destination == RtfDestination.ListOverrideTable ||
+            state.Destination == RtfDestination.ListOverride ||
+            state.Destination == RtfDestination.ListOverrideLevel ||
+            state.Destination == RtfDestination.Info ||
+            state.Destination == RtfDestination.InfoCreationTime ||
+            state.Destination == RtfDestination.InfoRevisionTime ||
+            state.Destination == RtfDestination.Picture ||
+            state.Destination == RtfDestination.PictureProperties)
+        {
+            return;
+        }
+
         if (state.Destination == RtfDestination.Annotation)
         {
             if (_activeAnnotation is not null)
             {
                 EnsureTextLimit(text.Length);
                 _activeAnnotation.Paragraph.AppendText(text, state.CharacterFormat);
+                _textCharacters += text.Length;
+            }
+            return;
+        }
+
+        if (state.Destination == RtfDestination.Footnote)
+        {
+            if (_activeNote is not null)
+            {
+                EnsureTextLimit(text.Length);
+                _activeNote.Paragraph.AppendText(text, state.CharacterFormat);
+                _textCharacters += text.Length;
+            }
+            return;
+        }
+
+        if (state.Destination == RtfDestination.HeaderFooter)
+        {
+            if (_activeHeaderFooter is not null)
+            {
+                EnsureTextLimit(text.Length);
+                _activeHeaderFooter.Paragraph.AppendText(text, state.CharacterFormat);
                 _textCharacters += text.Length;
             }
             return;
@@ -807,11 +1129,15 @@ internal sealed class RtfParser
 
     private void AppendObject(InlineObject value, RtfState state)
     {
-        if (state.Skip)
+        if (state.Skip || state.Destination == RtfDestination.PictureProperties || IsCapturedDestination(state.Destination))
             return;
         EnsureTextLimit(1);
         if (state.Destination == RtfDestination.Annotation && _activeAnnotation is not null)
             _activeAnnotation.Paragraph.AppendObject(value, state.CharacterFormat);
+        else if (state.Destination == RtfDestination.Footnote && _activeNote is not null)
+            _activeNote.Paragraph.AppendObject(value, state.CharacterFormat);
+        else if (state.Destination == RtfDestination.HeaderFooter && _activeHeaderFooter is not null)
+            _activeHeaderFooter.Paragraph.AppendObject(value, state.CharacterFormat);
         else
             _paragraph.AppendObject(value, state.CharacterFormat);
         _textCharacters++;
@@ -852,8 +1178,31 @@ internal sealed class RtfParser
             return;
         }
 
-        if (!force && _paragraph.TextLength == 0)
+        if (state.Destination == RtfDestination.Footnote && _activeNote is not null)
+        {
+            CommitNoteParagraph(force, state);
             return;
+        }
+
+        if (state.Destination == RtfDestination.HeaderFooter && _activeHeaderFooter is not null)
+        {
+            CommitHeaderFooterParagraph(force, state);
+            return;
+        }
+
+        if (state.InTable)
+        {
+            CommitTableParagraph(force, state);
+            return;
+        }
+
+        if (!force &&
+            _paragraph.TextLength == 0 &&
+            _paragraph.MarkList is not { Count: > 0 } &&
+            _paragraph.RangeList is not { Count: > 0 })
+        {
+            return;
+        }
 
         AddMarkupNode(0, "paragraph");
         _paragraph.Format = state.ParagraphFormat;
@@ -950,9 +1299,84 @@ internal sealed class RtfParser
             case RtfDestination.Annotation:
                 CompleteAnnotation(state);
                 break;
+            case RtfDestination.Footnote:
+                CompleteNote(state);
+                break;
+            case RtfDestination.HeaderFooter:
+                CompleteHeaderFooter(state);
+                break;
+            case RtfDestination.Picture:
+                CompletePicture();
+                break;
+            case RtfDestination.ShapePropertyName:
+            case RtfDestination.ShapePropertyValue:
+                CompletePictureProperty(frame.OpenedDestination, value, _destinationText.ToString());
+                break;
+            case RtfDestination.LevelText:
+                CompleteLevelText(_destinationText.ToString());
+                break;
+            case RtfDestination.ListLevel:
+                CompleteListLevel(state);
+                break;
+            case RtfDestination.List:
+                CompleteList();
+                break;
+            case RtfDestination.ListOverride:
+                CompleteListOverride();
+                break;
+            case RtfDestination.ListOverrideLevel:
+                _activeListOverride?.CompleteLevel();
+                break;
+            case RtfDestination.InfoTitle:
+                _document.Properties.Title = EmptyToNull(_destinationText.ToString());
+                break;
+            case RtfDestination.InfoSubject:
+                _document.Properties.Subject = EmptyToNull(_destinationText.ToString());
+                break;
+            case RtfDestination.InfoAuthor:
+                _document.Properties.Creator = EmptyToNull(_destinationText.ToString());
+                break;
+            case RtfDestination.InfoOperator:
+                _document.Properties.LastModifiedBy = EmptyToNull(_destinationText.ToString());
+                break;
+            case RtfDestination.InfoKeywords:
+                _document.Properties.Keywords = EmptyToNull(_destinationText.ToString());
+                break;
+            case RtfDestination.InfoDocComment:
+                _document.Properties.Description = EmptyToNull(_destinationText.ToString());
+                break;
+            case RtfDestination.InfoCategory:
+                _document.Properties.Category = EmptyToNull(_destinationText.ToString());
+                break;
+            case RtfDestination.InfoCreationTime:
+                _document.Properties.Created = TryBuildInfoDate(_activeInfoTime);
+                _activeInfoTime = null;
+                break;
+            case RtfDestination.InfoRevisionTime:
+                _document.Properties.Modified = TryBuildInfoDate(_activeInfoTime);
+                _activeInfoTime = null;
+                break;
+            case RtfDestination.BookmarkStart:
+                CompleteBookmarkStart(value, frame);
+                break;
+            case RtfDestination.BookmarkEnd:
+                CompleteBookmarkEnd(value, frame);
+                break;
+            case RtfDestination.FieldInstruction:
+                _pendingFieldInstruction = EmptyToNull(value);
+                break;
+            case RtfDestination.FieldResult:
+                CompleteFieldResult(frame, state);
+                break;
+            case RtfDestination.StyleEntry:
+                CompleteStyleEntry(state);
+                break;
+            case RtfDestination.StyleSheet:
+                CompleteStyleEntry(state);
+                break;
         }
 
-        if (frame.OpenedDestination != RtfDestination.Annotation)
+        if (frame.OpenedDestination is not (RtfDestination.Annotation or RtfDestination.FieldResult))
             _destinationText.Clear();
     }
 
@@ -1004,33 +1428,60 @@ internal sealed class RtfParser
 
     private void CaptureAnnotationTime(RtfToken token, RtfState state)
     {
-        if (state.Destination != RtfDestination.AnnotationTime ||
-            _activeAnnotationTime is null ||
-            !token.HasParameter)
-        {
+        if (!token.HasParameter)
             return;
-        }
+
+        RtfAnnotationTime? target = state.Destination switch
+        {
+            RtfDestination.AnnotationTime => _activeAnnotationTime,
+            RtfDestination.InfoCreationTime or RtfDestination.InfoRevisionTime => _activeInfoTime,
+            _ => null,
+        };
+        if (target is null)
+            return;
 
         switch (token.Keyword)
         {
             case RtfKeyword.Year:
-                _activeAnnotationTime.Year = token.Parameter;
+                target.Year = token.Parameter;
                 break;
             case RtfKeyword.Month:
-                _activeAnnotationTime.Month = token.Parameter;
+                target.Month = token.Parameter;
                 break;
             case RtfKeyword.Day:
-                _activeAnnotationTime.Day = token.Parameter;
+                target.Day = token.Parameter;
                 break;
             case RtfKeyword.Hour:
-                _activeAnnotationTime.Hour = token.Parameter;
+                target.Hour = token.Parameter;
                 break;
             case RtfKeyword.Minute:
-                _activeAnnotationTime.Minute = token.Parameter;
+                target.Minute = token.Parameter;
                 break;
             case RtfKeyword.Second:
-                _activeAnnotationTime.Second = token.Parameter;
+                target.Second = token.Parameter;
                 break;
+        }
+    }
+
+    private static DateTimeOffset? TryBuildInfoDate(RtfAnnotationTime? time)
+    {
+        if (time is null || time.Year is not int year || time.Month is not int month || time.Day is not int day)
+            return null;
+
+        try
+        {
+            return new DateTimeOffset(
+                year,
+                month,
+                day,
+                time.Hour ?? 0,
+                time.Minute ?? 0,
+                time.Second ?? 0,
+                TimeSpan.Zero);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null;
         }
     }
 
@@ -1479,7 +1930,20 @@ internal sealed class RtfParser
             RtfDestination.AnnotationTime or
             RtfDestination.AnnotationDate or
             RtfDestination.AnnotationReference or
-            RtfDestination.AnnotationParent;
+            RtfDestination.AnnotationParent or
+            RtfDestination.LevelText or
+            RtfDestination.BookmarkStart or
+            RtfDestination.BookmarkEnd or
+            RtfDestination.FieldInstruction or
+            RtfDestination.InfoTitle or
+            RtfDestination.InfoSubject or
+            RtfDestination.InfoAuthor or
+            RtfDestination.InfoOperator or
+            RtfDestination.InfoKeywords or
+            RtfDestination.InfoDocComment or
+            RtfDestination.InfoCategory or
+            RtfDestination.ShapePropertyName or
+            RtfDestination.ShapePropertyValue;
 
     private static string? EmptyToNull(string value) => value.Length == 0 ? null : value;
 
@@ -1726,11 +2190,25 @@ internal sealed class RtfParser
         public bool Skip;
         public bool AtGroupStart;
         public bool StarDestination;
+        public bool InTable;
         public RtfDestination Destination;
         public RunFormat CharacterFormat;
         public ParagraphFormat ParagraphFormat;
         public TabAlignment TabAlignment;
         public TabLeader TabLeader;
+        public RtfParagraphBorderTarget ParagraphBorderTarget;
+    }
+
+    private enum RtfParagraphBorderTarget : byte
+    {
+        None = 0,
+        Top,
+        Bottom,
+        Left,
+        Right,
+        Between,
+        Bar,
+        Box,
     }
 
     private readonly record struct RtfFont(string Name, int CodePage);
@@ -1749,6 +2227,35 @@ internal sealed class RtfParser
         AnnotationDate,
         AnnotationReference,
         AnnotationParent,
+        Footnote,
+        HeaderFooter,
+        Picture,
+        PictureProperties,
+        ShapePropertyName,
+        ShapePropertyValue,
+        ListTable,
+        List,
+        ListLevel,
+        LevelText,
+        ListOverrideTable,
+        ListOverride,
+        ListOverrideLevel,
+        BookmarkStart,
+        BookmarkEnd,
+        FieldInstruction,
+        FieldResult,
+        StyleSheet,
+        StyleEntry,
+        Info,
+        InfoTitle,
+        InfoSubject,
+        InfoAuthor,
+        InfoOperator,
+        InfoKeywords,
+        InfoDocComment,
+        InfoCategory,
+        InfoCreationTime,
+        InfoRevisionTime,
     }
 
     private struct RtfGroupFrame

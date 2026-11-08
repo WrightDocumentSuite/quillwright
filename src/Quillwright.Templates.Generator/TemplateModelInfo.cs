@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using Microsoft.CodeAnalysis;
 
 namespace Quillwright.Templates.Generator;
 
@@ -11,6 +12,17 @@ internal enum MemberRole
     Condition,
     Image,
 }
+
+/// <summary>One enclosing partial type declaration for a nested template model.</summary>
+internal readonly record struct ContainerTypeInfo(string Keyword, string Name);
+
+/// <summary>One diagnostic discovered while inspecting a template model.</summary>
+internal readonly record struct TemplateDiagnosticInfo(
+    DiagnosticDescriptor Descriptor,
+    Location Location,
+    string TargetName,
+    string? MemberName,
+    string? Detail);
 
 /// <summary>One member of a template model, as the generator sees it.</summary>
 internal readonly record struct TemplateMember(
@@ -29,12 +41,11 @@ internal sealed record TemplateModelInfo(
     string Namespace,
     string TypeName,
     string TypeKeyword,
-    string BinderName,
     string FullTypeName,
-    EquatableList<TemplateMember> Members)
-{
-    public string HintName => (Namespace.Length == 0 ? TypeName : Namespace + "." + TypeName) + ".Template.g.cs";
-}
+    string HintName,
+    EquatableList<ContainerTypeInfo> Containers,
+    EquatableList<TemplateMember> Members,
+    EquatableList<TemplateDiagnosticInfo> Diagnostics);
 
 /// <summary>
 /// A list with value equality, so the incremental generator's cache can tell whether a

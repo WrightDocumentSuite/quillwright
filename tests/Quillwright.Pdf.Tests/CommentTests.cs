@@ -151,7 +151,7 @@ public class CommentTests
         PdfMarkupAnnotation pdfReply = Assert.Single(note.Replies, candidate =>
             candidate.Contents == "Resolved reply.");
         PdfMarkupAnnotation rootInformation = Assert.Single(note.Replies, candidate =>
-            candidate.Contents == _resolutionInformation);
+            candidate.Contents == ResolutionInformation);
         PdfMarkupAnnotation replyInformation = Assert.Single(pdfReply.Replies);
 
         Assert.Equal(PdfReviewState.None, note.ReviewState);
@@ -192,6 +192,7 @@ public class CommentTests
     }
 
     [Fact]
+    [Trait("RequiresMicrosoftFonts", "true")]
     public void MixedDirectionCommentUsesTheLogicalEndOfTheRtlRange()
     {
         WordDocument document = WordDocument.Create();
@@ -276,12 +277,12 @@ public class CommentTests
         Assert.True(firstAnnotation < lastContent);
     }
 
-    private const string _resolutionInformation =
+    private const string ResolutionInformation =
         "Resolved in the source Word document; resolver identity and time are unavailable.";
 
     private static void AssertInformationalReply(PdfMarkupAnnotation reply)
     {
-        Assert.Equal(_resolutionInformation, reply.Contents);
+        Assert.Equal(ResolutionInformation, reply.Contents);
         Assert.True(reply.IsReply);
         Assert.Equal(PdfReviewState.None, reply.ReviewState);
         Assert.Null(reply.Author);

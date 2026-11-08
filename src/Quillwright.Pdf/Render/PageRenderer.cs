@@ -119,5 +119,5 @@ internal interface ITagWriter
     /// <summary>Starts collecting the marked content of one page.</summary>
     /// <param name="page">The page being drawn.</param>
     /// <param name="composed">What was composed for it.</param>
-    ITagSink ForPage(PdfPage page, ComposedPage composed);
+    public ITagSink ForPage(PdfPage page, ComposedPage composed);
 }

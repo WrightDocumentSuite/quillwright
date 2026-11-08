@@ -18,12 +18,21 @@ namespace Quillwright.Markdown;
 /// </remarks>
 internal sealed class MarkdownInlineParser
 {
+    internal enum CancellationCheckpoint : byte
+    {
+        InlineScan,
+        AutolinkScan,
+        HtmlTerminusScan,
+        EmphasisScan,
+    }
+
     private readonly IReadOnlyDictionary<string, (string Url, string? Title)> _definitions;
     private readonly Func<string, string?, int, ImageData?> _resolveImage;
     private readonly Func<Paragraph, string?, string, int, bool> _appendNoteReference;
     private readonly Action<string, int> _reportRawHtml;
     private readonly DocumentLoadBudgetState _budget;
     private readonly CancellationToken _cancellationToken;
+    private readonly Action<CancellationCheckpoint, int>? _cancellationCheckpoint;
     private int _parseDepth;
 
     internal MarkdownInlineParser(
@@ -32,7 +41,8 @@ internal sealed class MarkdownInlineParser
         Func<Paragraph, string?, string, int, bool> appendNoteReference,
         Action<string, int> reportRawHtml,
         DocumentLoadBudgetState budget,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<CancellationCheckpoint, int>? cancellationCheckpoint = null)
     {
         _definitions = definitions;
         _resolveImage = resolveImage;
@@ -40,6 +50,7 @@ internal sealed class MarkdownInlineParser
         _reportRawHtml = reportRawHtml;
         _budget = budget;
         _cancellationToken = cancellationToken;
+        _cancellationCheckpoint = cancellationCheckpoint;
     }
 
     /// <summary>Parses inline text into a paragraph.</summary>
@@ -161,7 +172,7 @@ internal sealed class MarkdownInlineParser
             while (i < text.Length)
             {
                 if ((i & 1023) == 0)
-                    _cancellationToken.ThrowIfCancellationRequested();
+                    CheckCancellation(CancellationCheckpoint.InlineScan, i);
                 char c = text[i];
                 switch (c)
                 {
@@ -441,7 +452,7 @@ internal sealed class MarkdownInlineParser
         for (; end < text.Length && text[end] != '>'; end++)
         {
             if (((end - at) & 4095) == 0)
-                _cancellationToken.ThrowIfCancellationRequested();
+                CheckCancellation(CancellationCheckpoint.AutolinkScan, end - at);
 
             char current = text[end];
             if (current is ' ' or '<')
@@ -511,7 +522,7 @@ internal sealed class MarkdownInlineParser
         for (int i = 0; i < text.Length; i++)
         {
             if ((i & 4095) == 0)
-                _cancellationToken.ThrowIfCancellationRequested();
+                CheckCancellation(CancellationCheckpoint.HtmlTerminusScan, i);
             if (text[i] != '>')
                 continue;
 
@@ -726,6 +737,12 @@ internal sealed class MarkdownInlineParser
     private static bool IsAsciiPunctuation(char c) =>
         c is (>= '!' and <= '/') or (>= ':' and <= '@') or (>= '[' and <= '`') or (>= '{' and <= '~');
 
+    private void CheckCancellation(CancellationCheckpoint checkpoint, int progress)
+    {
+        _cancellationCheckpoint?.Invoke(checkpoint, progress);
+        _cancellationToken.ThrowIfCancellationRequested();
+    }
+
     /// <summary>
     /// Pairs delimiter runs into emphasis, strong emphasis and strikethrough. A linked work list
     /// and one opener stack per delimiter kind keep both lookup and splicing amortized linear.
@@ -744,7 +761,7 @@ internal sealed class MarkdownInlineParser
         void CheckCancellation()
         {
             if ((++operations & 4095) == 0)
-                _cancellationToken.ThrowIfCancellationRequested();
+                this.CheckCancellation(CancellationCheckpoint.EmphasisScan, operations);
         }
 
         Stack<OpenerEntry>[] Openers(char kind) => kind switch

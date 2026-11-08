@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Quillwright.Fuzz</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SharpFuzz" Version="[2.3.0]" />
+    <ProjectReference Include="..\..\src\Quillwright\Quillwright.csproj" />
+    <ProjectReference Include="..\..\src\Quillwright.Doc\Quillwright.Doc.csproj" />
+    <ProjectReference Include="..\..\src\Quillwright.Rtf\Quillwright.Rtf.csproj" />
+  </ItemGroup>
+
+</Project>

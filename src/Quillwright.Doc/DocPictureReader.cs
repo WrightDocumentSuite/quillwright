@@ -40,13 +40,17 @@ internal static class DocPictureReader
 
         ImageData? image = OfficeArtBlip.FindFirst(
             data, offset + header, offset + total, delayed: null, loadBudget);
-        return image is null
-            ? null
-            : new Picture
-            {
-                Image = image,
-                Width = width > 0 ? Length.FromTwips(width) : image.NaturalWidth,
-                Height = height > 0 ? Length.FromTwips(height) : image.NaturalHeight,
-            };
+        if (image is null)
+            return null;
+
+        OfficeArtShape? shape = OfficeArtShapes.ReadInline(data, offset + header, offset + total);
+        return new Picture
+        {
+            Image = image,
+            Width = width > 0 ? Length.FromTwips(width) : image.NaturalWidth,
+            Height = height > 0 ? Length.FromTwips(height) : image.NaturalHeight,
+            Name = shape?.Name,
+            Description = shape?.Description,
+        };
     }
 }

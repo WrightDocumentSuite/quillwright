@@ -20,6 +20,8 @@ public sealed record HtmlImportOptions
 
     /// <summary>Whether images are loaded and embedded at all.</summary>
     public bool ImportImages { get; init; } = true;
+
+    internal Action<int>? NoteDiscoveryCancellationCheckpoint { get; init; }
 }
 
 /// <summary>What kind of compromise the importer had to make.</summary>

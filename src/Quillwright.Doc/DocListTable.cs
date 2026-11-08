@@ -124,18 +124,59 @@ internal static class DocListTable
         if (region.Length < 4 + OverrideBytes || region.Offset + region.Length > table.Length)
             return;
 
+        int limit = region.Offset + region.Length;
         int count = BinaryPrimitives.ReadInt32LittleEndian(table.AsSpan(region.Offset));
-        if (count <= 0 || region.Offset + 4 + (count * OverrideBytes) > region.Offset + region.Length)
+        if (count <= 0 || region.Offset + 4 + (count * OverrideBytes) > limit)
             return;
 
+        var instances = new NumberingInstance?[count];
+        var overrideCounts = new byte[count];
         for (int i = 0; i < count; i++)
         {
-            int identifier = BinaryPrimitives.ReadInt32LittleEndian(table.AsSpan(region.Offset + 4 + (i * OverrideBytes)));
+            int at = region.Offset + 4 + (i * OverrideBytes);
+            int identifier = BinaryPrimitives.ReadInt32LittleEndian(table.AsSpan(at));
+            overrideCounts[i] = table[at + 12];
             if (!byIdentifier.TryGetValue(identifier, out AbstractNumbering? definition))
                 continue;
 
             // A paragraph names its list by the one-based position of the override.
-            numbering.Instances.Add(new NumberingInstance { Id = i + 1, AbstractId = definition.Id });
+            var instance = new NumberingInstance { Id = i + 1, AbstractId = definition.Id };
+            numbering.Instances.Add(instance);
+            instances[i] = instance;
+        }
+
+        int position = region.Offset + 4 + (count * OverrideBytes);
+        for (int i = 0; i < count; i++)
+        {
+            if (position + 4 > limit)
+                return;
+            position += 4;
+
+            for (int levelIndex = 0; levelIndex < overrideCounts[i]; levelIndex++)
+            {
+                if (position + 8 > limit)
+                    return;
+
+                int startAt = BinaryPrimitives.ReadInt32LittleEndian(table.AsSpan(position));
+                byte flags = table[position + 4];
+                int level = flags & 0x0F;
+                bool hasStartAt = (flags & 0x10) != 0;
+                bool hasFormatting = (flags & 0x20) != 0;
+                position += 8;
+
+                if (hasStartAt && level < Levels && instances[i] is { } instance &&
+                    instance.Overrides.All(existing => existing.Level != level))
+                {
+                    instance.Overrides.Add(new NumberingLevelOverride
+                    {
+                        Level = level,
+                        StartOverride = startAt,
+                    });
+                }
+
+                if (hasFormatting && ReadLevel(table, ref position, limit, level) is null)
+                    return;
+            }
         }
     }
 

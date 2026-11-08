@@ -445,8 +445,8 @@ internal interface ITagSink
 {
     /// <summary>Reserves the next marked-content identifier and attaches it to a structure element.</summary>
     /// <param name="tag">The element the sequence belongs to.</param>
-    int Next(TagRef tag);
+    public int Next(TagRef tag);
 
     /// <summary>Represents a whole annotation object in the logical structure tree.</summary>
-    void AddAnnotation(TagRef? tag, Inkwright.Annotations.PdfAnnotation annotation);
+    public void AddAnnotation(TagRef? tag, Inkwright.Annotations.PdfAnnotation annotation);
 }

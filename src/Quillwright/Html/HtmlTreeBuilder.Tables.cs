@@ -231,14 +231,14 @@ internal sealed partial class HtmlTreeBuilder
         switch (token.Kind)
         {
             case HtmlTokenKind.Character:
-            {
-                string whitespace = TakeLeadingWhitespace(token);
-                InsertText(whitespace);
-                if (token.Data.Length == 0)
-                    return;
+                {
+                    string whitespace = TakeLeadingWhitespace(token);
+                    InsertText(whitespace);
+                    if (token.Data.Length == 0)
+                        return;
 
-                break;
-            }
+                    break;
+                }
 
             case HtmlTokenKind.Comment:
                 InsertComment(token);
@@ -523,14 +523,14 @@ internal sealed partial class HtmlTreeBuilder
         switch (token.Kind)
         {
             case HtmlTokenKind.Character:
-            {
-                string data = token.Data.ToString().Replace('\0', '�');
-                InsertText(data);
-                if (!IsAllWhitespace(data))
-                    _framesetOk = false;
+                {
+                    string data = token.Data.ToString().Replace('\0', '�');
+                    InsertText(data);
+                    if (!IsAllWhitespace(data))
+                        _framesetOk = false;
 
-                return;
-            }
+                    return;
+                }
 
             case HtmlTokenKind.Comment:
                 InsertComment(token);
@@ -554,20 +554,20 @@ internal sealed partial class HtmlTreeBuilder
                 return;
 
             case HtmlTokenKind.StartTag:
-            {
-                HtmlNamespace space = AdjustedCurrent?.Namespace ?? HtmlNamespace.Html;
-                if (space == HtmlNamespace.Svg && SvgCase(token.TagName) is { } adjusted)
                 {
-                    token.Name.Clear();
-                    token.Name.Append(adjusted);
+                    HtmlNamespace space = AdjustedCurrent?.Namespace ?? HtmlNamespace.Html;
+                    if (space == HtmlNamespace.Svg && SvgCase(token.TagName) is { } adjusted)
+                    {
+                        token.Name.Clear();
+                        token.Name.Append(adjusted);
+                    }
+
+                    InsertElement(token, space);
+                    if (token.SelfClosing)
+                        _stack.RemoveAt(_stack.Count - 1);
+
+                    return;
                 }
-
-                InsertElement(token, space);
-                if (token.SelfClosing)
-                    _stack.RemoveAt(_stack.Count - 1);
-
-                return;
-            }
 
             case HtmlTokenKind.EndTag when token.TagName is "br" or "p":
                 while (Current is { } node && node.Namespace != HtmlNamespace.Html &&
@@ -580,27 +580,27 @@ internal sealed partial class HtmlTreeBuilder
                 return;
 
             case HtmlTokenKind.EndTag:
-            {
-                for (int i = _stack.Count - 1; i >= 0; i--)
                 {
-                    HtmlElement node = _stack[i];
-                    if (i < _stack.Count - 1 && node.Namespace == HtmlNamespace.Html)
+                    for (int i = _stack.Count - 1; i >= 0; i--)
                     {
-                        ProcessInMode(_mode, token);
-                        return;
+                        HtmlElement node = _stack[i];
+                        if (i < _stack.Count - 1 && node.Namespace == HtmlNamespace.Html)
+                        {
+                            ProcessInMode(_mode, token);
+                            return;
+                        }
+
+                        if (string.Equals(node.Name, token.TagName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            while (_stack.Count > i)
+                                _stack.RemoveAt(_stack.Count - 1);
+
+                            return;
+                        }
                     }
 
-                    if (string.Equals(node.Name, token.TagName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        while (_stack.Count > i)
-                            _stack.RemoveAt(_stack.Count - 1);
-
-                        return;
-                    }
+                    return;
                 }
-
-                return;
-            }
 
             default:
                 ProcessInMode(_mode, token);

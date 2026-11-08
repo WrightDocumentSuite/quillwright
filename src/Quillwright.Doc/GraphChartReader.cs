@@ -32,6 +32,7 @@ internal static class GraphChartReader
     private const ushort RecordNumber = 0x0003;
     private const ushort RecordEndOfFile = 0x000A;
     private const ushort RecordContinue = 0x003C;
+    private const ushort RecordBiffNumber = 0x0203;
     private const ushort RecordLabel = 0x0204;
     private const ushort RecordBeginOfFile = 0x0809;
     private const ushort RecordChart = 0x1002;
@@ -51,6 +52,7 @@ internal static class GraphChartReader
     private const ushort RecordDataReference = 0x1051;
     private const ushort RecordOrientation = 0x1055;
     private const ushort RecordErrorBar = 0x105B;
+    private const ushort RecordSeriesIndex = 0x1065;
 
     /// <summary>Reads the chart inside an embedded Microsoft Graph object.</summary>
     /// <param name="embedded">The object, as it came out of the pool.</param>
@@ -153,10 +155,12 @@ internal static class GraphChartReader
         switch (type)
         {
             case RecordNumber when data.Length >= 15:
-                sheet.Set(Row(data), Column(data), BinaryPrimitives.ReadDoubleLittleEndian(data[7..]));
+            case RecordBiffNumber when data.Length >= 14:
+                int numberOffset = type == RecordBiffNumber && data.Length == 14 ? 6 : 7;
+                StorePoint(sheet, chart, Row(data), Column(data), BinaryPrimitives.ReadDoubleLittleEndian(data[numberOffset..]));
                 return;
             case RecordLabel when data.Length >= 8:
-                sheet.Set(Row(data), Column(data), ShortString(data[7..]));
+                StorePoint(sheet, chart, Row(data), Column(data), ReadLabelString(data));
                 return;
             case RecordSeries:
                 chart.Series.Add(chart.Current = new GraphSeries());
@@ -176,8 +180,12 @@ internal static class GraphChartReader
             case RecordSeriesList:
                 chart.Group(data);
                 return;
+            case RecordSeriesIndex when data.Length >= 2:
+                chart.SeriesDataSection = BinaryPrimitives.ReadUInt16LittleEndian(data);
+                return;
             case RecordBeginOfFile or RecordEndOfFile or RecordChart:
                 chart.Current = null;
+                chart.SeriesDataSection = 0;
                 return;
             default:
                 if (Kind(type) is { } kind)
@@ -187,9 +195,23 @@ internal static class GraphChartReader
         }
     }
 
+    private static void StorePoint(DataSheet sheet, GraphChart chart, int row, int column, object value)
+    {
+        if (chart.SeriesDataSection != 0)
+        {
+            chart.CachePoint(column, row, value);
+            return;
+        }
+
+        sheet.Set(row, column, value);
+    }
+
     /// <summary>Turns one series' references into the numbers and labels it draws.</summary>
     private static ChartSeries Build(GraphSeries series, DataSheet sheet, bool inRows, ChartKind fallback)
     {
+        if (series.CachedValues.Count > 0)
+            return BuildCached(series, fallback);
+
         IReadOnlyList<object?> values = series.Values is { } line ? sheet.Line(line, inRows) : [];
         IReadOnlyList<object?> categories = series.Categories is { } labels ? sheet.Line(labels, inRows) : [];
         IReadOnlyList<object?> bubbles = series.BubbleSizes is { } sizes ? sheet.Line(sizes, inRows) : [];
@@ -205,9 +227,41 @@ internal static class GraphChartReader
         };
     }
 
+    private static ChartSeries BuildCached(GraphSeries series, ChartKind fallback)
+    {
+        int count = Math.Max(series.CachedValues.Count, series.CachedCategories.Count);
+        return new ChartSeries
+        {
+            Name = series.Name,
+            Values = [.. series.CachedValues],
+            BubbleSizes = [.. series.CachedBubbleSizes],
+            Categories = [.. Enumerable.Range(0, count)
+                .Select(index => index < series.CachedCategories.Count && series.CachedCategories[index] is { } label
+                    ? label
+                    : (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture))],
+            Kind = series.Kind ?? fallback,
+        };
+    }
+
     private static int Row(ReadOnlySpan<byte> data) => BinaryPrimitives.ReadUInt16LittleEndian(data);
 
     private static int Column(ReadOnlySpan<byte> data) => BinaryPrimitives.ReadUInt16LittleEndian(data[2..]);
+
+    private static string ReadLabelString(ReadOnlySpan<byte> data)
+    {
+        string text = ShortString(data[7..]);
+        if (text.Length > 0 || data.Length < 9)
+            return text;
+
+        int count = BinaryPrimitives.ReadUInt16LittleEndian(data[6..]);
+        bool wide = (data[8] & 0x1) != 0;
+        int bytes = wide ? count * 2 : count;
+        if (bytes <= 0 || 9 + bytes > data.Length)
+            return string.Empty;
+
+        ReadOnlySpan<byte> chars = data.Slice(9, bytes);
+        return wide ? Encoding.Unicode.GetString(chars) : Encoding.Latin1.GetString(chars);
+    }
 
     /// <summary>A string counted in characters, one byte or two apiece ([MS-OGRAPH] 2.5.27).</summary>
     private static string ShortString(ReadOnlySpan<byte> data)
@@ -260,6 +314,18 @@ internal static class GraphChartReader
         /// <summary>Whether a series is a row of the data sheet rather than a column.</summary>
         public bool SeriesInRows { get; set; } = true;
 
+        /// <summary>Which cached series-value section (<c>SIIndex</c>) is active, or zero outside one.</summary>
+        public int SeriesDataSection { get; set; }
+
+        /// <summary>Stores one cached point from an <c>SIIndex</c> block ([MS-XLS] 2.4.262).</summary>
+        public void CachePoint(int seriesIndex, int pointIndex, object value)
+        {
+            if (seriesIndex < 0 || seriesIndex >= Series.Count || pointIndex < 0)
+                return;
+
+            Series[seriesIndex].Cache(SeriesDataSection, pointIndex, value);
+        }
+
         /// <summary>A record naming what a chart group draws.</summary>
         /// <param name="kind">What it draws.</param>
         public void Opened(ChartKind kind)
@@ -309,6 +375,12 @@ internal static class GraphChartReader
         /// <summary>Where the bubble sizes are, for the one kind of chart that has a third stream.</summary>
         public int? BubbleSizes { get; private set; }
 
+        public List<double?> CachedValues { get; } = [];
+
+        public List<string?> CachedCategories { get; } = [];
+
+        public List<double?> CachedBubbleSizes { get; } = [];
+
         /// <summary>What this series is drawn as, when a chart group claimed it.</summary>
         public ChartKind? Kind { get; set; }
 
@@ -331,6 +403,35 @@ internal static class GraphChartReader
                 case 2: Categories ??= line; break;
                 case 3: BubbleSizes ??= line; break;
             }
+        }
+
+        public void Cache(int section, int index, object value)
+        {
+            switch (section)
+            {
+                case 1 when value is double number:
+                    SetAt(CachedValues, index, number);
+                    break;
+                case 2:
+                    SetAt(CachedCategories, index, value switch
+                    {
+                        string text => text,
+                        double number => number.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        _ => null,
+                    });
+                    break;
+                case 3 when value is double size:
+                    SetAt(CachedBubbleSizes, index, size);
+                    break;
+            }
+        }
+
+        private static void SetAt<T>(List<T?> list, int index, T? value)
+        {
+            while (list.Count <= index)
+                list.Add(default);
+
+            list[index] = value;
         }
     }
 

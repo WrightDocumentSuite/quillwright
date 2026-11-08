@@ -149,14 +149,14 @@ internal sealed partial class HtmlTreeBuilder
                 break;
 
             case HtmlTokenKind.StartTag when token.TagName == "html":
-            {
-                _budget?.EnsureMarkupDepth(1);
-                HtmlElement html = CreateFor(token);
-                _document.Append(html);
-                _stack.Add(html);
-                _mode = Mode.BeforeHead;
-                return;
-            }
+                {
+                    _budget?.EnsureMarkupDepth(1);
+                    HtmlElement html = CreateFor(token);
+                    _document.Append(html);
+                    _stack.Add(html);
+                    _mode = Mode.BeforeHead;
+                    return;
+                }
 
             case HtmlTokenKind.EndTag when token.TagName is not ("head" or "body" or "html" or "br"):
                 return;
@@ -222,14 +222,14 @@ internal sealed partial class HtmlTreeBuilder
         switch (token.Kind)
         {
             case HtmlTokenKind.Character:
-            {
-                string whitespace = TakeLeadingWhitespace(token);
-                InsertText(whitespace);
-                if (token.Data.Length == 0)
-                    return;
+                {
+                    string whitespace = TakeLeadingWhitespace(token);
+                    InsertText(whitespace);
+                    if (token.Data.Length == 0)
+                        return;
 
-                break;
-            }
+                    break;
+                }
 
             case HtmlTokenKind.Comment:
                 InsertComment(token);
@@ -362,14 +362,14 @@ internal sealed partial class HtmlTreeBuilder
                 return;
 
             case HtmlTokenKind.Character:
-            {
-                string whitespace = TakeLeadingWhitespace(token);
-                InsertText(whitespace);
-                if (token.Data.Length == 0)
-                    return;
+                {
+                    string whitespace = TakeLeadingWhitespace(token);
+                    InsertText(whitespace);
+                    if (token.Data.Length == 0)
+                        return;
 
-                break;
-            }
+                    break;
+                }
 
             case HtmlTokenKind.Comment:
             case HtmlTokenKind.ProcessingInstruction:
@@ -401,14 +401,14 @@ internal sealed partial class HtmlTreeBuilder
         switch (token.Kind)
         {
             case HtmlTokenKind.Character:
-            {
-                string whitespace = TakeLeadingWhitespace(token);
-                InsertText(whitespace);
-                if (token.Data.Length == 0)
-                    return;
+                {
+                    string whitespace = TakeLeadingWhitespace(token);
+                    InsertText(whitespace);
+                    if (token.Data.Length == 0)
+                        return;
 
-                break;
-            }
+                    break;
+                }
 
             case HtmlTokenKind.Comment:
                 InsertComment(token);
@@ -441,16 +441,16 @@ internal sealed partial class HtmlTreeBuilder
 
                     case "base" or "basefont" or "bgsound" or "link" or "meta" or "noframes" or "script"
                         or "style" or "template" or "title":
-                    {
-                        if (_head is { } head)
                         {
-                            _stack.Add(head);
-                            InHeadMode(token);
-                            _stack.Remove(head);
-                        }
+                            if (_head is { } head)
+                            {
+                                _stack.Add(head);
+                                InHeadMode(token);
+                                _stack.Remove(head);
+                            }
 
-                        return;
-                    }
+                            return;
+                        }
 
                     case "head":
                         return;

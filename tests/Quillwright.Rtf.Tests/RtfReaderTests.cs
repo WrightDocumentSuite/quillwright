@@ -189,6 +189,12 @@ public class RtfReaderTests
             @"{\rtf1 before {\field{\*\fldinst HYPERLINK ""https://example.com""}{\fldrslt visible result}} after}"));
 
         Assert.Equal("before visible result after", result.Document.GetText());
+        Paragraph paragraph = result.Document.Sections[0].Blocks.Paragraphs.Single();
+        (int Start, int Length, InlineRange Range) range = Assert.Single(paragraph.Ranges);
+        Assert.Equal(7, range.Start);
+        Assert.Equal(14, range.Length);
+        Hyperlink link = Assert.IsType<Hyperlink>(range.Range);
+        Assert.Equal("https://example.com", link.Url);
     }
 
     [Fact]
@@ -529,6 +535,29 @@ public class RtfReaderTests
                 stream,
                 options,
                 TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public void DocumentLevelPaperMarginsAndBoxBorder_AreImportedIntoSectionAndParagraph()
+    {
+        string rtf = @"{\rtf1\ansi{\colortbl;\red10\green20\blue30;\red240\green240\blue200;}\paperw12240\paperh15840\margl1440\margr1440\margt1080\margb1080\landscape\pard\box\brdrs\brdrw15\brdrcf1\cbpat2 Boxed paragraph\par}";
+        RtfImportResult result = RtfReader.Load(Ascii(rtf));
+
+        Section section = Assert.Single(result.Document.Sections);
+        Assert.Equal(12240, section.Properties.PageWidth.Twips);
+        Assert.Equal(15840, section.Properties.PageHeight.Twips);
+        Assert.Equal(1440, section.Properties.Margins.Left.Twips);
+        Assert.Equal(1080, section.Properties.Margins.Top.Twips);
+        Assert.Equal(PageOrientation.Landscape, section.Properties.Orientation);
+
+        Paragraph paragraph = Assert.Single(section.Blocks.Paragraphs);
+        Assert.Equal(WordColor.FromRgb(240, 240, 200), paragraph.Format.Shading?.Fill);
+        Assert.NotNull(paragraph.Format.Borders);
+        Assert.Equal(BorderStyle.Single, paragraph.Format.Borders!.Top?.Style);
+        Assert.Equal(BorderStyle.Single, paragraph.Format.Borders.Bottom?.Style);
+        Assert.Equal(BorderStyle.Single, paragraph.Format.Borders.Left?.Style);
+        Assert.Equal(BorderStyle.Single, paragraph.Format.Borders.Right?.Style);
+        Assert.Equal(WordColor.FromRgb(10, 20, 30), paragraph.Format.Borders.Top?.Color);
     }
 
     private static string Annotation(string id, string reference, string text, string? parent = null) =>

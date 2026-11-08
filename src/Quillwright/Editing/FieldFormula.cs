@@ -366,12 +366,12 @@ internal interface IFormulaNames
 {
     /// <summary>The text a bookmark or a single cell holds, or <see langword="null"/> for an unknown name.</summary>
     /// <param name="name">The name as it was written.</param>
-    string? Resolve(string name);
+    public string? Resolve(string name);
 
     /// <summary>
     /// The numbers a reference to several cells stands for, or <see langword="null"/> when
     /// the reference names no cells.
     /// </summary>
     /// <param name="reference">A direction such as <c>ABOVE</c>, or a range such as <c>A1:B3</c>.</param>
-    IReadOnlyList<double>? ResolveRange(string reference);
+    public IReadOnlyList<double>? ResolveRange(string reference);
 }

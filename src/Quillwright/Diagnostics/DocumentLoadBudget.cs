@@ -37,10 +37,16 @@ public sealed record DocumentLoadBudget
     /// <summary>Largest uncompressed package part or compound-file stream. The default is 512 MiB.</summary>
     public long MaxPartBytes { get; init; } = 512 * MiB;
 
-    /// <summary>Largest XML part, measured in decoded characters. The default is 512 Mi characters.</summary>
+    /// <summary>
+    /// Largest XML part, measured in decoded characters. For a standalone Office add-in manifest,
+    /// this also caps the total XML-derived text retained in the result. The default is 512 Mi characters.
+    /// </summary>
     public long MaxXmlCharactersPerPart { get; init; } = 512 * MiB;
 
-    /// <summary>Largest total number of XML nodes read from one package. The default is four million.</summary>
+    /// <summary>
+    /// Largest total number of XML nodes read from one package or standalone manifest.
+    /// The default is four million.
+    /// </summary>
     public long MaxXmlNodes { get; init; } = 4_000_000;
 
     /// <summary>Largest XML element nesting depth. The default is 256.</summary>

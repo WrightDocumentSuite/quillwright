@@ -72,8 +72,13 @@ about memory, and it has to be measured like one.
 
 ## Corpus
 
-The correctness suite is the more interesting measurement. Every run loads 934 real `.docx`
-files and 249 real `.doc` files from the Open XML SDK and Telerik reference repositories,
-saves each one, and asserts that no package part was lost, that the text is identical after a
-reload, and that a document which validated before still validates after. That whole suite
-runs in about forty seconds.
+The correctness suite is the more interesting measurement. In the documented reference
+snapshot it enumerates 934 real `.docx` files: 932 unencrypted packages must load, save and
+reload, while two password-protected fixtures must produce their exact expected refusal. For
+the 932 it checks identical extracted text, survival of every non-relationship OPC part and
+every original relationship record, SHA-256 identity and content type of every copy-through
+part, and that validator-clean inputs remain clean. Two deliberately malformed packages that
+make the SDK validator throw have their own exact rejection cases and do not support that last
+claim. The separate legacy suite enumerates 249 real `.doc` files. Corpus time varies
+substantially with storage, validator work and test parallelism, so it is reported by the test
+run rather than treated as a benchmark threshold.

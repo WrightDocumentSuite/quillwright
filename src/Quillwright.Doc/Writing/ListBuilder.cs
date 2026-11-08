@@ -89,18 +89,39 @@ internal sealed class ListBuilder
         var bytes = new List<byte>(64);
         Append32(bytes, _references.Count);
 
-        foreach (int instance in _references.OrderBy(pair => pair.Value).Select(static pair => pair.Key))
+        int[] orderedInstances = [.. _references.OrderBy(pair => pair.Value).Select(static pair => pair.Key)];
+        var overridesByInstance = new List<NumberingLevelOverride>[orderedInstances.Length];
+
+        for (int i = 0; i < orderedInstances.Length; i++)
         {
+            int instanceId = orderedInstances[i];
+            NumberingInstance? instance = _context.Document.Numbering.Instances.FirstOrDefault(item => item.Id == instanceId);
+            List<NumberingLevelOverride> overrides = instance is null
+                ? []
+                : [.. instance.Overrides
+                    .Where(static item => item.Level is >= 0 and < Levels && item.StartOverride is not null)
+                    .OrderBy(static item => item.Level)];
+            overridesByInstance[i] = overrides;
+
             var entry = new byte[16];
-            BinaryPrimitives.WriteInt32LittleEndian(entry, ListIdentifier(instance));
-            entry[14] = 0;  // No level of this override differs from the definition.
+            BinaryPrimitives.WriteInt32LittleEndian(entry, ListIdentifier(instanceId));
+            entry[12] = (byte)Math.Min(overrides.Count, Levels);
             bytes.AddRange(entry);
         }
 
-        // Each override is followed by data of its own: with no level overrides, that is one
-        // unused position apiece.
-        foreach (int _ in _references.Values)
+        // Each override is followed by an LFOData structure: 4-byte cp followed by any LFOLVL records.
+        Span<byte> lfoLvl = stackalloc byte[8];
+        for (int i = 0; i < orderedInstances.Length; i++)
+        {
             Append32(bytes, 0);
+            foreach (NumberingLevelOverride levelOverride in overridesByInstance[i])
+            {
+                lfoLvl.Clear();
+                BinaryPrimitives.WriteInt32LittleEndian(lfoLvl, Math.Clamp(levelOverride.StartOverride!.Value, 0, 0x7FFF));
+                lfoLvl[4] = (byte)((levelOverride.Level & 0x0F) | 0x10);
+                bytes.AddRange(lfoLvl);
+            }
+        }
 
         return [.. bytes];
     }

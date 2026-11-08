@@ -25,6 +25,8 @@ save.
   `\fcharsetN`/`\cpgN` code pages, including multi-byte character sets
 - `\uN` Unicode characters with their `\ucN` fallback, and `\upr`/`\ud` alternatives
 - Paragraphs, sections, tabs, and line, page and column breaks
+- Document metadata from `\info` (`\title`, `\subject`, `\author`, `\operator`, `\keywords`,
+  `\doccomm`, `\*\category`, `\versionN`, `\creatim` and `\revtim`)
 - Font and colour tables; the selected font, text colour, underline colour and fixed highlight
   palette
 - Common character formatting: bold, italic, capitals, strike, outline, shadow, emboss,
@@ -32,8 +34,32 @@ save.
   kerning, position, direction and language
 - Common paragraph formatting: alignment, indents, spacing, line-spacing rule, keep flags,
   page-break-before, widow control, line-number suppression, hyphenation, direction, contextual
-  spacing, outline level and tab stops with leaders
+  spacing, outline level, tab stops with leaders, paragraph borders (`\brdrt`, `\brdrl`, `\brdrb`,
+  `\brdrr`, `\brdrbtw`, `\brdrbar`, `\box`) and background shading (`\cbpatN`)
+- Document and section page geometry: paper size (`\paperw`, `\paperh`, `\pgwsxn`, `\pghsxn`),
+  orientation (`\landscape`, `\lndscpsxn`), margins and header/footer distances (`\margl`..`\margb`,
+  `\gutter`, `\marglsxn`..`\margbsxn`, `\guttersxn`, `\headery`, `\footery`), section break types
+  (`\sbknone`, `\sbkcol`, `\sbkpage`, `\sbkeven`, `\sbkodd`), and equal or custom-width columns
+  (`\cols`, `\colsx`, `\linebetcol`, `\colno`, `\colw`, `\colsr`)
 - The visible result of a field; its instruction is not inserted into ordinary document text
+- Tables (`\trowd`, `\cellxN`, `\intbl`, `\cell`, `\row`, row height/header/keep/alignment,
+  cell widths, table and cell borders `\trbrdr*`/`\clbrdr*`, background shading `\clcbpatN`,
+  vertical alignment, horizontal/vertical merges, and multi-paragraph or nested block content inside cells)
+- Named paragraph, character and table styles from `\stylesheet` (`\sN`, `\csN`, `\tsN`,
+  `\sbasedonN`, `\snextN`, and style formatting)
+- Hyperlinks (`HYPERLINK` field instructions with external URLs or `#bookmark` anchors and optional
+  `\o` tooltips) and bookmarks (`{\*\bkmkstart ...}` and `{\*\bkmkend ...}`)
+- Lists and multi-level numbering (`\listtable`, `\listoverridetable`, `\lfolevel` start
+  overrides, `\lsN`, `\ilvlN`, bullet and numbered level formats, while skipping legacy
+  `\listtext`/`\pntext` fallbacks)
+- Section headers and footers (`\header`, `\headerl`, `\headerr`, `\headerf`, `\footer`,
+  `\footerl`, `\footerr`, `\footerf`, and `\titlepg`)
+- Footnotes and endnotes (`\footnote`, `\ftnalt`, and `\chftn` reference/number marks)
+- Inline PNG and JPEG pictures (`\pict` with `\pngblip`/`\jpegblip`, `\picwgoalN`, `\pichgoalN`,
+  `\picscalexN`, `\picscaleyN`, and `\shppict` wrappers), bounded by `DocumentLoadBudget`
+  (`MaxMediaParts`, `MaxPartBytes`, and `MaxTotalPartBytes`), with the name and alternative text
+  Word keeps in `{\*\picprop{\sp{\sn wzName}...}{\sp{\sn wzDescription}...}}`; other shape
+  properties there are ignored
 - RTF 1.9.1 comments and replies: `atrfstart`/`atrfend` ranges, point comments, `atnid`
   initials, `atnauthor`, structured `atntime`, packed-DTTM `atndate`, `atnref`, `atnparent`,
   multi-paragraph annotation bodies and the `chatn` reference marker
@@ -44,8 +70,8 @@ closing brace, while paragraph properties continue across `\par` until changed o
 
 ## Deliberate boundary
 
-This reader is a conversion reader, not a lossless RTF editor. Style sheets, lists,
-tables, headers and footers, notes, pictures, drawing objects and embedded objects
+This reader is a conversion reader, not a lossless RTF editor. WMF/EMF metafiles,
+drawing objects and embedded OLE objects
 are not modelled from RTF yet. Resource destinations do not leak into body text. Recognised
 content-bearing destinations that are skipped add an `RtfImportWarning`; unknown optional
 destinations introduced by `\*` are skipped as the RTF specification requires.

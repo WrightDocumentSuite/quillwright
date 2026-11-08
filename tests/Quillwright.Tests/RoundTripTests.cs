@@ -1,9 +1,9 @@
-using Quillwright.Model;
-using Quillwright.Primitives;
-using Quillwright.Styles;
 using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
+using Quillwright.Model;
+using Quillwright.Primitives;
+using Quillwright.Styles;
 
 namespace Quillwright.Tests;
 

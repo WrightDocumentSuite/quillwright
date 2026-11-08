@@ -1,3 +1,4 @@
+using Quillwright.Diagnostics;
 using Quillwright.Model;
 
 namespace Quillwright.Templates;
@@ -32,13 +33,118 @@ public static class WordTemplateEngine
     /// <param name="model">The values to fill in.</param>
     /// <param name="outputPath">Where to write the filled document.</param>
     /// <param name="cancellationToken">Cancels the work.</param>
-    public static async ValueTask<TemplateResult> RenderAsync<TModel>(
+    public static ValueTask<TemplateResult> RenderAsync<TModel>(
         string templatePath, TModel model, string outputPath, CancellationToken cancellationToken = default)
+        where TModel : ITemplateModel =>
+        RenderAsync(templatePath, model, outputPath, loadOptions: null, saveOptions: null, cancellationToken);
+
+    /// <summary>Fills a template file and writes the result to another file using custom load and save options.</summary>
+    /// <typeparam name="TModel">The model type, marked with <see cref="WordTemplateAttribute"/>.</typeparam>
+    /// <param name="templatePath">Path to the template document.</param>
+    /// <param name="model">The values to fill in.</param>
+    /// <param name="outputPath">Where to write the filled document.</param>
+    /// <param name="loadOptions">Options for loading the template document.</param>
+    /// <param name="saveOptions">Options for saving the filled document.</param>
+    /// <param name="cancellationToken">Cancels the work.</param>
+    public static async ValueTask<TemplateResult> RenderAsync<TModel>(
+        string templatePath,
+        TModel model,
+        string outputPath,
+        LoadOptions? loadOptions,
+        SaveOptions? saveOptions = null,
+        CancellationToken cancellationToken = default)
         where TModel : ITemplateModel
     {
-        WordDocument document = await WordDocument.LoadAsync(templatePath, cancellationToken: cancellationToken).ConfigureAwait(false);
+        ArgumentException.ThrowIfNullOrEmpty(templatePath);
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentException.ThrowIfNullOrEmpty(outputPath);
+
+        WordDocument document = await WordDocument.LoadAsync(templatePath, loadOptions, cancellationToken).ConfigureAwait(false);
         TemplateResult result = Render(document, model);
-        await document.SaveAsync(outputPath, cancellationToken: cancellationToken).ConfigureAwait(false);
+        await document.SaveAsync(outputPath, saveOptions, cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    /// <summary>Fills a template file using a binder resolved at run time and writes the result to another file.</summary>
+    /// <param name="templatePath">Path to the template document.</param>
+    /// <param name="model">The values to fill in.</param>
+    /// <param name="binder">Reads the members of the model.</param>
+    /// <param name="outputPath">Where to write the filled document.</param>
+    /// <param name="loadOptions">Options for loading the template document.</param>
+    /// <param name="saveOptions">Options for saving the filled document.</param>
+    /// <param name="cancellationToken">Cancels the work.</param>
+    public static async ValueTask<TemplateResult> RenderAsync(
+        string templatePath,
+        object model,
+        ITemplateBinder binder,
+        string outputPath,
+        LoadOptions? loadOptions = null,
+        SaveOptions? saveOptions = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(templatePath);
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(binder);
+        ArgumentException.ThrowIfNullOrEmpty(outputPath);
+
+        WordDocument document = await WordDocument.LoadAsync(templatePath, loadOptions, cancellationToken).ConfigureAwait(false);
+        TemplateResult result = Render(document, model, binder);
+        await document.SaveAsync(outputPath, saveOptions, cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    /// <summary>Fills a template stream and writes the result to another stream, leaving both streams open.</summary>
+    /// <typeparam name="TModel">The model type, marked with <see cref="WordTemplateAttribute"/>.</typeparam>
+    /// <param name="template">Stream containing the template document.</param>
+    /// <param name="model">The values to fill in.</param>
+    /// <param name="output">Stream to write the filled document to.</param>
+    /// <param name="loadOptions">Options for loading the template document.</param>
+    /// <param name="saveOptions">Options for saving the filled document.</param>
+    /// <param name="cancellationToken">Cancels the work.</param>
+    public static async ValueTask<TemplateResult> RenderAsync<TModel>(
+        Stream template,
+        TModel model,
+        Stream output,
+        LoadOptions? loadOptions = null,
+        SaveOptions? saveOptions = null,
+        CancellationToken cancellationToken = default)
+        where TModel : ITemplateModel
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(output);
+
+        WordDocument document = await WordDocument.LoadAsync(template, loadOptions, cancellationToken).ConfigureAwait(false);
+        TemplateResult result = Render(document, model);
+        await document.SaveAsync(output, saveOptions, cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    /// <summary>Fills a template stream using a binder resolved at run time and writes the result to another stream, leaving both streams open.</summary>
+    /// <param name="template">Stream containing the template document.</param>
+    /// <param name="model">The values to fill in.</param>
+    /// <param name="binder">Reads the members of the model.</param>
+    /// <param name="output">Stream to write the filled document to.</param>
+    /// <param name="loadOptions">Options for loading the template document.</param>
+    /// <param name="saveOptions">Options for saving the filled document.</param>
+    /// <param name="cancellationToken">Cancels the work.</param>
+    public static async ValueTask<TemplateResult> RenderAsync(
+        Stream template,
+        object model,
+        ITemplateBinder binder,
+        Stream output,
+        LoadOptions? loadOptions = null,
+        SaveOptions? saveOptions = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(binder);
+        ArgumentNullException.ThrowIfNull(output);
+
+        WordDocument document = await WordDocument.LoadAsync(template, loadOptions, cancellationToken).ConfigureAwait(false);
+        TemplateResult result = Render(document, model, binder);
+        await document.SaveAsync(output, saveOptions, cancellationToken).ConfigureAwait(false);
         return result;
     }
 

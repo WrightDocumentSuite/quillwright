@@ -1,5 +1,5 @@
-using Quillwright.Model;
 using Quillwright.Diagnostics;
+using Quillwright.Model;
 
 namespace Quillwright.Doc;
 

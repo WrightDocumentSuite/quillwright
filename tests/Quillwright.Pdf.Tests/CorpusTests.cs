@@ -53,6 +53,7 @@ public sealed class CorpusTests
     }
 
     [Fact]
+    [Trait("RequiresMicrosoftFonts", "true")]
     public void ADocumentUsingEverythingAtOnceComesThroughWhole()
     {
         WordDocument document = Everything();
@@ -62,6 +63,7 @@ public sealed class CorpusTests
     }
 
     [Fact]
+    [Trait("RequiresMicrosoftFonts", "true")]
     public void ADocumentUsingEverythingAtOnceAlsoTagsCleanly()
     {
         WordDocument document = Everything();

@@ -20,4 +20,7 @@
   <Folder Name="/samples/">
     <Project Path="samples/Quillwright.Samples/Quillwright.Samples.csproj" />
   </Folder>
+  <Folder Name="/fuzz/">
+    <Project Path="fuzz/Quillwright.Fuzz/Quillwright.Fuzz.csproj" />
+  </Folder>
 </Solution>

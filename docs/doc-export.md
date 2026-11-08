@@ -74,8 +74,9 @@ finds.
 - Fields, with the field type derived from the instruction; hyperlinks are written as
   `HYPERLINK` fields
 - Bookmarks, including overlapping ones and ones that span paragraphs
-- Pictures, as PNG or JPEG in the data stream
-- Numbering: list definitions, their nine levels and the overrides paragraphs point at
+- Pictures, as PNG or JPEG in the data stream, with their name and alternative text as the
+  `wzName` and `wzDescription` properties of the picture's shape ([MS-ODRAW] 2.3.4.1 and 2.3.4.2)
+- Numbering: list definitions, their nine levels and the overrides (including per-level starting numbers) paragraphs point at
 
 ## What is not
 
@@ -135,8 +136,11 @@ mean something entirely different — `sprmCFOutline` is 0x0838 and `sprmCFCaps`
 shadow, small caps and hidden text in between — and nothing but a round trip catches a
 mistake there.
 
-**Corpus.** All 249 legacy documents and all 934 modern documents in the reference corpora are
-read, written as `.doc`, and read again; the visible text has to match exactly.
+**Corpus.** The conversion theories enumerate 249 legacy `.doc` files and 515 modern `.docx`
+files from the Telerik snapshot. For every input the corresponding reader accepts, the
+document is written as `.doc`, read again, and its visible text has to match exactly. Expected
+legacy-format refusals are not evidence of a round trip, and the modern conversion theory does
+not sweep the separate Open XML SDK asset collection.
 
 **Word.** The other two tests check the writer against this library's own reader, which shares
 its understanding of the format and therefore shares any misunderstanding. Word is the only

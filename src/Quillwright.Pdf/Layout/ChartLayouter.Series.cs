@@ -51,9 +51,11 @@ internal sealed partial class ChartLayouter
 
         Area inner = Axes(layout, chart, style, plot, scale, categories);
         double step = categories > 1 ? inner.Width / (categories - 1) : 0;
+        double zero = scale.Y(inner, 0);
 
         for (int s = 0; s < chart.Series.Count; s++)
         {
+            PdfColor color = Palette[s % Palette.Length];
             var points = new List<(double X, double Y)>(categories);
             for (int c = 0; c < categories; c++)
             {
@@ -61,8 +63,106 @@ internal sealed partial class ChartLayouter
                     points.Add((inner.Left + (step * c) + (categories > 1 ? 0 : inner.Width / 2), scale.Y(inner, value)));
             }
 
+            if (chart.Kind == ChartKind.Area && points.Count > 1)
+                layout.Shapes.Add(new ChartShape(color, [.. points, (points[^1].X, zero), (points[0].X, zero)]));
+
+            if (chart.Kind == ChartKind.Scatter)
+            {
+                foreach ((double px, double py) in points)
+                    layout.Shapes.Add(new ChartShape(color, Box(px - 1.5, py - 1.5, 3, 3)));
+            }
+
             if (points.Count > 1)
-                layout.Strokes.Add(new ChartStroke(Palette[s % Palette.Length], Math.Max(0.7, style.FontSize / 8), points));
+                layout.Strokes.Add(new ChartStroke(color, Math.Max(0.7, style.FontSize / 8), points));
+        }
+    }
+
+    private void Bubbles(ChartLayout layout, Chart chart, CharacterStyle style, in Area plot)
+    {
+        Scale scale = Scale.Of(chart);
+        int categories = Categories(chart);
+        if (categories == 0)
+            return;
+
+        Area inner = Axes(layout, chart, style, plot, scale, categories);
+        double slot = inner.Width / categories;
+        double maxBubble = chart.Series.SelectMany(static s => s.BubbleSizes).OfType<double>().DefaultIfEmpty(1).Max();
+        maxBubble = Math.Max(maxBubble, 1e-9);
+        double maxRadius = Math.Clamp(Math.Min(inner.Width, inner.Height) * 0.1, 3.5, 16);
+
+        for (int s = 0; s < chart.Series.Count; s++)
+        {
+            PdfColor color = Palette[s % Palette.Length];
+            for (int c = 0; c < categories; c++)
+            {
+                if (Value(chart.Series[s], c) is not { } value)
+                    continue;
+
+                double size = c < chart.Series[s].BubbleSizes.Count ? chart.Series[s].BubbleSizes[c] ?? 1 : 1;
+                double radius = Math.Clamp(Math.Sqrt(Math.Max(0, size) / maxBubble) * maxRadius, 2, maxRadius);
+                double px = inner.Left + (slot * (c + 0.5));
+                double py = scale.Y(inner, value);
+                layout.Shapes.Add(new ChartShape(color, Wedge(px, py, radius, hole: 0, 0, Math.PI * 2)));
+            }
+        }
+    }
+
+    private void Radar(ChartLayout layout, Chart chart, CharacterStyle style, in Area plot)
+    {
+        int spokes = Math.Max(3, Categories(chart));
+        Scale scale = Scale.Of(chart);
+        double span = Math.Max(1e-9, scale.Maximum - scale.Minimum);
+        double cx = (plot.Left + plot.Right) / 2;
+        double cy = (plot.Top + plot.Bottom) / 2;
+        double radius = Math.Max(4, (Math.Min(plot.Width, plot.Height) / 2) - style.LineHeight);
+
+        RadarWeb(layout, chart.Series[0].Categories, style, spokes, cx, cy, radius);
+        for (int s = 0; s < chart.Series.Count; s++)
+        {
+            var ring = new List<(double X, double Y)>(spokes + 1);
+            for (int i = 0; i < spokes; i++)
+            {
+                double val = Value(chart.Series[s], i) ?? 0;
+                double r = Math.Clamp((val - scale.Minimum) / span, 0, 1) * radius;
+                double angle = (-Math.PI / 2) + (2 * Math.PI * i / spokes);
+                ring.Add((cx + (r * Math.Cos(angle)), cy + (r * Math.Sin(angle))));
+            }
+
+            if (ring.Count > 1)
+            {
+                ring.Add(ring[0]);
+                layout.Strokes.Add(new ChartStroke(Palette[s % Palette.Length], Math.Max(0.7, style.FontSize / 8), ring));
+            }
+        }
+    }
+
+    private static void RadarWeb(
+        ChartLayout layout, IReadOnlyList<string> names, CharacterStyle style, int spokes, double cx, double cy, double radius)
+    {
+        for (int level = 1; level <= GridLines; level++)
+        {
+            double r = radius * level / GridLines;
+            var ring = new List<(double X, double Y)>(spokes + 1);
+            for (int i = 0; i <= spokes; i++)
+            {
+                double angle = (-Math.PI / 2) + (2 * Math.PI * (i % spokes) / spokes);
+                ring.Add((cx + (r * Math.Cos(angle)), cy + (r * Math.Sin(angle))));
+            }
+
+            layout.Strokes.Add(new ChartStroke(AxisColor, 0.4, ring));
+        }
+
+        for (int i = 0; i < spokes; i++)
+        {
+            double angle = (-Math.PI / 2) + (2 * Math.PI * i / spokes);
+            layout.Strokes.Add(new ChartStroke(AxisColor, 0.4, [(cx, cy), (cx + (radius * Math.Cos(angle)), cy + (radius * Math.Sin(angle)))]));
+            if (i < names.Count && names[i] is { Length: > 0 } label)
+            {
+                double w = style.Measure(label);
+                double lx = cx + ((radius + (style.FontSize * 0.5)) * Math.Cos(angle)) - (w / 2);
+                double ly = cy + ((radius + (style.FontSize * 0.5)) * Math.Sin(angle)) + (style.Ascent / 2);
+                layout.Labels.Add(new EquationMark(label, style, lx, ly));
+            }
         }
     }
 

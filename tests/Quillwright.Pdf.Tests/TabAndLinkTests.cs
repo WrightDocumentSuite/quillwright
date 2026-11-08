@@ -141,6 +141,7 @@ public sealed class TabAndLinkTests
     }
 
     [Fact]
+    [Trait("RequiresMicrosoftFonts", "true")]
     public void AnInternalLinkPointsAtTheBookmarkedPage()
     {
         WordDocument document = WordDocument.Create();

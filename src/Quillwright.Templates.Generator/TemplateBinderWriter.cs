@@ -8,7 +8,8 @@ namespace Quillwright.Templates.Generator;
 /// <summary>Emits the binder source for one template model.</summary>
 internal static class TemplateBinderWriter
 {
-    private const string Culture = "global::System.Globalization.CultureInfo.CurrentCulture";
+    private const string Culture = "global::System.Globalization.CultureInfo.InvariantCulture";
+    private const string BinderClassName = "__TemplateBinder";
 
     public static string Write(TemplateModelInfo model)
     {
@@ -20,33 +21,43 @@ internal static class TemplateBinderWriter
         if (model.Namespace.Length > 0)
             source.Append("namespace ").Append(model.Namespace).AppendLine(";").AppendLine();
 
+        foreach (ContainerTypeInfo container in model.Containers)
+        {
+            source.Append("partial ").Append(container.Keyword).Append(' ').Append(container.Name).AppendLine();
+            source.AppendLine("{");
+        }
+
         source.Append("partial ").Append(model.TypeKeyword).Append(' ').Append(model.TypeName)
             .AppendLine(" : global::Quillwright.Templates.ITemplateModel");
         source.AppendLine("{");
         source.AppendLine("    /// <summary>Reads the members of this model by template name, without reflection.</summary>");
         source.Append("    public static global::Quillwright.Templates.ITemplateBinder TemplateBinder => ")
-            .Append(model.BinderName).AppendLine(".Instance;");
-        source.AppendLine("}");
+            .Append(BinderClassName).AppendLine(".Instance;");
         source.AppendLine();
 
         WriteBinder(source, model);
+        source.AppendLine("}");
+
+        for (int i = 0; i < model.Containers.Count; i++)
+            source.AppendLine("}");
+
         return source.ToString();
     }
 
     private static void WriteBinder(StringBuilder source, TemplateModelInfo model)
     {
-        source.Append("file sealed class ").Append(model.BinderName)
+        source.Append("    private sealed class ").Append(BinderClassName)
             .AppendLine(" : global::Quillwright.Templates.ITemplateBinder");
-        source.AppendLine("{");
-        source.Append("    public static readonly ").Append(model.BinderName).Append(" Instance = new ")
-            .Append(model.BinderName).AppendLine("();");
+        source.AppendLine("    {");
+        source.Append("        public static readonly ").Append(BinderClassName).Append(" Instance = new ")
+            .Append(BinderClassName).AppendLine("();");
         source.AppendLine();
 
-        source.Append("    private static readonly string[] _names = [")
+        source.Append("        private static readonly string[] _names = [")
             .Append(string.Join(", ", model.Members.Select(static m => Quote(m.Name))))
             .AppendLine("];");
         source.AppendLine();
-        source.AppendLine("    public global::System.Collections.Generic.IReadOnlyList<string> Names => _names;");
+        source.AppendLine("        public global::System.Collections.Generic.IReadOnlyList<string> Names => _names;");
         source.AppendLine();
 
         WriteLookup(
@@ -72,9 +83,9 @@ internal static class TemplateBinderWriter
             "public bool TryGetImage(object model, string name, out global::Quillwright.Templates.TemplateImage image)",
             "image", "default",
             static member => "if (typed." + member.Accessor + " is null) break;" +
-                             "\n                image = " + ImageExpression(member) + ";");
+                             "\n                    image = " + ImageExpression(member) + ";");
 
-        source.AppendLine("}");
+        source.AppendLine("    }");
     }
 
     private static void WriteLookup(
@@ -88,32 +99,32 @@ internal static class TemplateBinderWriter
     {
         List<TemplateMember> members = [.. model.Members.Where(member => member.Role == role)];
 
-        source.Append("    ").AppendLine(signature);
-        source.AppendLine("    {");
+        source.Append("        ").AppendLine(signature);
+        source.AppendLine("        {");
         if (members.Count == 0)
         {
-            source.Append("        ").Append(outName).Append(" = ").Append(missing).AppendLine(";");
-            source.AppendLine("        return false;");
-            source.AppendLine("    }");
+            source.Append("            ").Append(outName).Append(" = ").Append(missing).AppendLine(";");
+            source.AppendLine("            return false;");
+            source.AppendLine("        }");
             source.AppendLine();
             return;
         }
 
-        source.Append("        var typed = (").Append(model.FullTypeName).AppendLine(")model;");
-        source.AppendLine("        switch (name)");
-        source.AppendLine("        {");
+        source.Append("            var typed = (").Append(model.FullTypeName).AppendLine(")model;");
+        source.AppendLine("            switch (name)");
+        source.AppendLine("            {");
         foreach (TemplateMember member in members)
         {
-            source.Append("            case ").Append(Quote(member.Name)).AppendLine(":");
-            source.Append("                ").AppendLine(body(member));
-            source.AppendLine("                return true;");
+            source.Append("                case ").Append(Quote(member.Name)).AppendLine(":");
+            source.Append("                    ").AppendLine(body(member));
+            source.AppendLine("                    return true;");
         }
 
-        source.AppendLine("        }");
+        source.AppendLine("            }");
         source.AppendLine();
-        source.Append("        ").Append(outName).Append(" = ").Append(missing).AppendLine(";");
-        source.AppendLine("        return false;");
-        source.AppendLine("    }");
+        source.Append("            ").Append(outName).Append(" = ").Append(missing).AppendLine(";");
+        source.AppendLine("            return false;");
+        source.AppendLine("        }");
         source.AppendLine();
     }
 
@@ -123,8 +134,6 @@ internal static class TemplateBinderWriter
         if (member.Format is { } format)
             return $"({access} as global::System.IFormattable)?.ToString({Quote(format)}, {Culture})";
 
-        // A non-nullable value type never needs the null-conditional, and the compiler
-        // rejects it there, so the two cases are spelled out rather than guessed.
         return member.IsNullable ? access + "?.ToString()" : access + ".ToString()";
     }
 
@@ -144,5 +153,38 @@ internal static class TemplateBinderWriter
             : "global::Quillwright.Primitives.Length.FromCentimeters(" +
               centimeters.ToString("R", CultureInfo.InvariantCulture) + ")";
 
-    private static string Quote(string value) => "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+    internal static string Quote(string value)
+    {
+        var literal = new StringBuilder(value.Length + 2).Append('"');
+        foreach (char character in value)
+        {
+            switch (character)
+            {
+                case '\\': literal.Append("\\\\"); break;
+                case '"': literal.Append("\\\""); break;
+                case '\0': literal.Append("\\0"); break;
+                case '\a': literal.Append("\\a"); break;
+                case '\b': literal.Append("\\b"); break;
+                case '\f': literal.Append("\\f"); break;
+                case '\n': literal.Append("\\n"); break;
+                case '\r': literal.Append("\\r"); break;
+                case '\t': literal.Append("\\t"); break;
+                case '\v': literal.Append("\\v"); break;
+                default:
+                    if (char.IsControl(character) || char.IsSurrogate(character) || character is '\u2028' or '\u2029')
+                    {
+                        literal.Append("\\u")
+                            .Append(((int)character).ToString("X4", CultureInfo.InvariantCulture));
+                    }
+                    else
+                    {
+                        literal.Append(character);
+                    }
+
+                    break;
+            }
+        }
+
+        return literal.Append('"').ToString();
+    }
 }

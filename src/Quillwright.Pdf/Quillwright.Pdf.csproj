@@ -17,6 +17,12 @@
   <ItemGroup>
     <ProjectReference Include="..\Quillwright\Quillwright.csproj" />
     <PackageReference Include="Inkwright" />
+    <!--
+      Not used directly. Inkwright 0.1.3 accepts Pkcs 10.0.0, which has known vulnerabilities;
+      a dependency of this package raises the floor for every consumer. With PrivateAssets it
+      would stay out of the nuspec and protect only this build.
+    -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" />
   </ItemGroup>
 
 </Project>

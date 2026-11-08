@@ -35,8 +35,8 @@ the linked document says exactly which elements or records are on which side of 
 | **Command tables** [MS-CTDOC] | detect | no | no | — | `fcCmds`/`lcbCmds` is noticed and reported as a loss; the `Tcg` itself is not decoded and no later format has anywhere to put it. |
 | **PDF** | — | subset | — | yes | A renderer, not a converter: pagination, tables, notes, wrapping, equations, charts and tagging. JPEG and PNG travel untouched; bitmap, GIF, TIFF and the bitmap inside a metafile are decoded and re-encoded. [PDF export](pdf-export.md) |
 | **Markdown** | subset | subset | — | — | Both directions are semantic projections over a shared subset, not general inverses. Import reads CommonMark and the GitHub table, strikethrough and task-list extensions; raw HTML stays text, so HTML fallbacks emitted for notes or non-GFM tables are not reconstructed as those document constructs. Export diagnostics name each approximation. [Import](markdown-import.md), [export](markdown-export.md) |
-| **HTML** [WHATWG] | yes | subset | — | — | Parsing is the standard's own algorithm: all 84 tokenizer states, all 21 insertion modes, the adoption agency algorithm, foster parenting and the 2229 named character references — checked case by case against a browser's parser. What the *importer* then maps into the document model is a subset, named in its diagnostics. Export is a semantic projection, but the importer does not yet reconstruct every exported construct, including notes. [Import](html-import.md), [export](html-export.md) |
-| **RTF 1.9.1** | subset | subset | no | — | Semantic conversion of text, Unicode/code pages, resources, direct character and paragraph formatting, tabs, breaks and sections. Styles, lists, tables, notes, headers/footers and drawing destinations are not converted yet; skipped or flattened content is named in diagnostics. [Import](rtf-import.md), [export](rtf-export.md) |
+| **HTML** [WHATWG] | yes | subset | — | — | Parsing is the standard's own algorithm: all 84 tokenizer states, all 21 insertion modes, the adoption agency algorithm, foster parenting and the 2229 named character references — checked case by case against a browser's parser. What the *importer* then maps into the document model is a subset, named in its diagnostics. It reconstructs footnotes and endnotes emitted with Quillwright's reciprocal-link convention; other export fallbacks are not promised to invert. [Import](html-import.md), [export](html-export.md) |
+| **RTF 1.9.1** | subset | subset | no | — | Semantic conversion of text, Unicode/code pages, document metadata (`\info`), resources, styles (`\stylesheet`), lists (with `\lfolevel` start overrides), tables (with borders, merges, shading and nested cell blocks), hyperlinks, bookmarks, notes, comments, headers/footers, inline PNG/JPEG pictures, direct character and paragraph formatting, tabs, breaks and sections. Drawing destinations and OLE objects are not converted yet; skipped or flattened content is named in diagnostics. [Import](rtf-import.md), [export](rtf-export.md) |
 | **ODT** | no | no | — | — | Not supported in either direction. |
 
 ## Formats that are not in a document
@@ -50,8 +50,8 @@ CoAuthoringLocks? file = CoAuthoringLockFile.ReadAll(await File.ReadAllBytesAsyn
 foreach (CoAuthoringLock held in file?.Effective ?? [])
     Console.WriteLine($"{held.OwnerName} holds {held.Paragraphs.Count} paragraph(s)");
 
-// What an Office add-in claims to be, from the manifest a catalogue distributes
-OfficeAddInManifest? manifest = OfficeAddInManifestReader.Read(await File.ReadAllBytesAsync("addin.xml"));
+// What an Office add-in claims to be, from manifest bytes acquired under the same service limit
+OfficeAddInManifest? manifest = OfficeAddInManifestReader.Read(manifestBytes, budget, cancellationToken);
 Console.WriteLine($"{manifest?.Kind}: {manifest?.DisplayName?.For("en-US")}");
 foreach (OfficeAddInSourceLocation page in manifest?.SourceLocations ?? [])
     Console.WriteLine($"  {page.Context} loads {page.Url.DefaultValue}");
@@ -59,7 +59,9 @@ foreach (OfficeAddInSourceLocation page in manifest?.SourceLocations ?? [])
 
 Neither reader opens a network connection, resolves an external entity, or follows any address
 it reads. A lock file cannot be found from a document and an add-in manifest cannot be
-reconstructed from one, so neither is a property of `WordDocument`.
+reconstructed from one, so neither is a property of `WordDocument`. The manifest reader's
+budgeted overload enforces input bytes, decoded XML characters, total nodes and nesting depth;
+malformed XML returns `null`, while resource-limit and cancellation failures remain exceptions.
 
 ## Where the deliberate departures are written down
 

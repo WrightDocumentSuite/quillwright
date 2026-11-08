@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Text;
 using Quillwright.Model;
 using Quillwright.Primitives;
 
@@ -12,8 +13,8 @@ namespace Quillwright.Doc.Writing;
 /// <remarks>
 /// The drawing layer is a separate format ([MS-ODRAW]) that Word embeds whole. Only the
 /// smallest arrangement that displays one inline bitmap is written here — a picture frame
-/// shape whose single property points at one blip — because anything richer would mean
-/// modelling a drawing canvas the document model does not have.
+/// shape whose properties point at one blip and carry its name and alternative text — because
+/// anything richer would mean modelling a drawing canvas the document model does not have.
 /// </remarks>
 internal static class OfficeArtWriter
 {
@@ -27,7 +28,7 @@ internal static class OfficeArtWriter
     /// <summary>Builds the whole record for one picture, ready to append to the data stream.</summary>
     public static byte[] Build(Picture picture)
     {
-        byte[] drawing = Drawing(picture.Image);
+        byte[] drawing = Drawing(picture);
         var bytes = new List<byte>(HeaderBytes + drawing.Length);
 
         Length width = picture.Width != Length.Zero ? picture.Width : picture.Image.NaturalWidth;
@@ -55,12 +56,13 @@ internal static class OfficeArtWriter
     private static short Twips(Length value) => (short)Math.Clamp(value.Twips, 1, short.MaxValue);
 
     /// <summary>The shape container followed by the image bytes it refers to.</summary>
-    private static byte[] Drawing(ImageData image)
+    private static byte[] Drawing(Picture picture)
     {
+        (int count, byte[] properties) = Properties(picture);
         byte[] shape = Record(version: 2, instance: PictureFrameShape, type: 0xF00A, ShapeBody());
-        byte[] options = Record(version: 3, instance: 1, type: 0xF00B, PictureProperty());
+        byte[] options = Record(version: 3, instance: count, type: 0xF00B, properties);
         byte[] container = Record(version: 0xF, instance: 0, type: 0xF004, [.. shape, .. options]);
-        return [.. container, .. Blip(image)];
+        return [.. container, .. Blip(picture.Image)];
     }
 
     private static byte[] ShapeBody()
@@ -71,13 +73,38 @@ internal static class OfficeArtWriter
         return body;
     }
 
-    /// <summary>The one shape property that matters: which stored image this frame shows.</summary>
-    private static byte[] PictureProperty()
+    /// <summary>
+    /// The shape's property table: which stored image this frame shows, then its name and
+    /// alternative text ([MS-ODRAW] 2.3.4.1 and 2.3.4.2). A string does not fit in its entry,
+    /// so the entry holds its length and the UTF-16 text, nul included, follows the table.
+    /// </summary>
+    private static (int Count, byte[] Body) Properties(Picture picture)
     {
-        var property = new byte[6];
-        BinaryPrimitives.WriteUInt16LittleEndian(property, 0x4104);
-        BinaryPrimitives.WriteUInt32LittleEndian(property.AsSpan(2), 1);
-        return property;
+        var table = new List<byte>();
+        var values = new List<byte>();
+
+        Add(0x4104, 1);
+        AddText(0x0380, picture.Name);
+        AddText(0x0381, picture.Description);
+        return (table.Count / 6, [.. table, .. values]);
+
+        void Add(int identifier, int value)
+        {
+            var property = new byte[6];
+            BinaryPrimitives.WriteUInt16LittleEndian(property, (ushort)identifier);
+            BinaryPrimitives.WriteInt32LittleEndian(property.AsSpan(2), value);
+            table.AddRange(property);
+        }
+
+        void AddText(int identifier, string? text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return;
+
+            byte[] bytes = Encoding.Unicode.GetBytes(text + "\0");
+            Add(identifier | 0x8000, bytes.Length);
+            values.AddRange(bytes);
+        }
     }
 
     private static byte[] Blip(ImageData image)

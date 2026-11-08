@@ -205,31 +205,31 @@ public sealed class MarkdownFootnoteImportTests
     }
 
     [Fact]
-    public async Task MalformedAutolinksAndUnmatchedEmphasis_ObserveCancellation()
+    public void MalformedAutolinksAndUnmatchedEmphasis_ObserveCancellationDuringInlineScan()
     {
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        string markdown = string.Concat(Enumerable.Repeat("<a a* ", 2_000_000));
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task parse = Task.Run(
-            () =>
-            {
-                started.SetResult();
-                var parser = new MarkdownInlineParser(
-                    new Dictionary<string, (string Url, string? Title)>(),
-                    static (_, _, _) => null,
-                    static (_, _, _, _) => false,
-                    static (_, _) => { },
-                    new DocumentLoadBudgetState(DocumentLoadBudget.Default),
-                    cancellation.Token);
-                parser.Fill(new Paragraph(), markdown, RunFormat.Default, 1);
-            },
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
             TestContext.Current.CancellationToken);
+        int observedProgress = -1;
+        var parser = new MarkdownInlineParser(
+            new Dictionary<string, (string Url, string? Title)>(),
+            static (_, _, _) => null,
+            static (_, _, _, _) => false,
+            static (_, _) => { },
+            new DocumentLoadBudgetState(DocumentLoadBudget.Default),
+            cancellation.Token,
+            (checkpoint, progress) =>
+            {
+                if (checkpoint != MarkdownInlineParser.CancellationCheckpoint.InlineScan || progress < 1024)
+                    return;
 
-        await started.Task.WaitAsync(TestContext.Current.CancellationToken);
-        await Task.Delay(1, TestContext.Current.CancellationToken);
-        cancellation.Cancel();
+                observedProgress = progress;
+                cancellation.Cancel();
+            });
+        string markdown = string.Concat(Enumerable.Repeat("<a a* ", 400));
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => parse);
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            parser.Fill(new Paragraph(), markdown, RunFormat.Default, 1));
+        Assert.Equal(1024, observedProgress);
     }
 
     [Fact]
@@ -274,31 +274,31 @@ public sealed class MarkdownFootnoteImportTests
     }
 
     [Fact]
-    public async Task GiantInlineHtmlTerminusScan_ObservesCancellationNearTheStart()
+    public void InlineHtmlTerminusScan_ObservesCancellationAfterAWorkQuantum()
     {
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        int observedProgress = -1;
         var parser = new MarkdownInlineParser(
             new Dictionary<string, (string Url, string? Title)>(),
             static (_, _, _) => null,
             static (_, _, _, _) => false,
             static (_, _) => { },
             new DocumentLoadBudgetState(DocumentLoadBudget.Default),
-            cancellation.Token);
-        string markdown = "<!--" + new string('x', 15_000_000) + " *emphasis*";
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task parse = Task.Run(
-            () =>
+            cancellation.Token,
+            (checkpoint, progress) =>
             {
-                started.SetResult();
-                parser.Fill(new Paragraph(), markdown, RunFormat.Default, 1);
-            },
-            TestContext.Current.CancellationToken);
+                if (checkpoint != MarkdownInlineParser.CancellationCheckpoint.HtmlTerminusScan || progress < 4096)
+                    return;
 
-        await started.Task.WaitAsync(TestContext.Current.CancellationToken);
-        await Task.Delay(1, TestContext.Current.CancellationToken);
-        cancellation.Cancel();
+                observedProgress = progress;
+                cancellation.Cancel();
+            });
+        string markdown = "<!--" + new string('x', 8192);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => parse);
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            parser.Fill(new Paragraph(), markdown, RunFormat.Default, 1));
+        Assert.Equal(4096, observedProgress);
     }
 
     [Fact]
@@ -328,5 +328,28 @@ public sealed class MarkdownFootnoteImportTests
         Assert.True(result.Diagnostics.IsEmpty, result.Diagnostics.ToString());
         Assert.EndsWith(" unclosed emphasis", result.Document.Paragraphs.Single().GetText(), StringComparison.Ordinal);
         Assert.True(result.Document.Paragraphs.Single().Runs.Single(static run => run.Text == "emphasis").Format.Italic);
+    }
+
+    [Fact]
+    public void PlainGfmNumericFootnotesAndLazyContinuationLines_ImportAndRoundTrip()
+    {
+        const string Markdown =
+            "Statement[^3] and another[^1].\n\n" +
+            "[^1]: First footnote line\n" +
+            "lazy continuation line\n\n" +
+            "[^3]: Third footnote with **bold** text.\n";
+
+        MarkdownImportResult result = MarkdownImporter.Import(Markdown);
+
+        Assert.True(result.Diagnostics.IsEmpty, result.Diagnostics.ToString());
+        Note[] footnotes = [.. result.Document.Footnotes.Where(static n => n.Kind == NoteKind.Normal)];
+        Assert.Equal([3, 1], footnotes.Select(static n => n.Id));
+        Assert.Equal("Third footnote with bold text.", footnotes[0].Blocks.Paragraphs.Single().GetText());
+        Assert.Equal("First footnote line lazy continuation line", footnotes[1].Blocks.Paragraphs.Single().GetText());
+
+        string exported = result.Document.ToMarkdown().Text;
+        MarkdownImportResult reimported = MarkdownImporter.Import(exported);
+        Assert.True(reimported.Diagnostics.IsEmpty, reimported.Diagnostics.ToString());
+        Assert.Equal([3, 1], reimported.Document.Footnotes.Where(static n => n.Kind == NoteKind.Normal).Select(static n => n.Id));
     }
 }

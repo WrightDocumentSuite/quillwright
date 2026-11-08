@@ -1,5 +1,7 @@
 # Quillwright
 
+[![CI](https://github.com/WrightDocumentSuite/quillwright/actions/workflows/ci.yml/badge.svg)](https://github.com/WrightDocumentSuite/quillwright/actions/workflows/ci.yml)
+
 A .NET 10 library for Word documents (Apache-2.0). Layered the way `System.Text.Json` is —
 primitives, streaming, document model, typed templating — with a paragraph representation
 built for the way Word actually stores text.
@@ -15,10 +17,13 @@ await doc.SaveAsync("agreement.docx");
 
 ## What it does
 
-- **Edits real documents without breaking them.** Charts, SmartArt, embedded objects, custom
-  XML, themes and VBA are carried through byte for byte. Verified against 934 documents
-  produced by Word over two decades: every one round-trips with no part lost, identical text,
-  and no new schema violation.
+- **Edits real documents without breaking their copy-through content.** Charts, SmartArt,
+  embedded objects, custom XML, themes and VBA are carried through byte for byte. In the
+  current 934-file Open XML SDK 3.5.1/Telerik reference snapshot, 932 unencrypted packages
+  save and reload with identical extracted text, every original relationship record and every
+  non-relationship OPC part still present, and every copy-through part hash-identical. The two
+  password-protected fixtures are separate expected-refusal tests; validator-clean inputs must
+  remain validator-clean after save.
 - **Data-oriented paragraphs.** A paragraph is one text buffer with runs, hyperlinks,
   bookmarks and comment ranges laid over it as offset ranges. `paragraph.Text` is free, and
   find-and-replace across run boundaries is an ordinary splice rather than a stitching job.
@@ -86,7 +91,9 @@ await doc.SaveAsync("agreement.docx");
   [import](docs/html-import.md) guides.
 - **RTF as an explicit semantic conversion.** `Quillwright.Rtf` reads the RTF 1.9.1 group and
   destination grammar directly, including Unicode fallbacks, per-font code pages, font and
-  colour tables, direct character and paragraph formatting and tab stops. Its deterministic
+  colour tables, `\stylesheet` styles, lists, tables (with borders, shading, merges and nested
+  blocks), hyperlinks, bookmarks, notes, comments, headers/footers, inline PNG/JPEG pictures,
+  direct character and paragraph formatting and tab stops. Its deterministic
   writer emits the same supported subset, and both directions return diagnostics for every
   deliberate approximation. See the [import](docs/rtf-import.md) and
   [export](docs/rtf-export.md) guides.
@@ -207,6 +214,10 @@ await markdown.SaveAsync("quarterly-markdown");
 - [Macros](docs/macros.md)
 - [Benchmarks](docs/benchmarks.md)
 - [Running the tests](docs/testing.md)
+- [Release process](docs/releasing.md)
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
 
 ## Building
 

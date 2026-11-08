@@ -115,6 +115,26 @@ public class DocListTests
         Assert.NotEqual(paragraphs[0].Format.NumberingId, paragraphs[1].Format.NumberingId);
     }
 
+    [Fact]
+    public void ALevelStartOverride_SurvivesTheRoundTrip()
+    {
+        WordDocument document = WordDocument.Create();
+        int list = document.Numbering.AddNumberedList();
+        NumberingInstance instance = Assert.Single(document.Numbering.Instances, item => item.Id == list);
+        instance.Overrides.Add(new NumberingLevelOverride { Level = 0, StartOverride = 7 });
+        instance.Overrides.Add(new NumberingLevelOverride { Level = 1, StartOverride = 3 });
+        Add(document, Numbered("Starts at seven", list, 0));
+
+        WordDocument reopened = RoundTrip(document);
+        Paragraph paragraph = reopened.Sections.SelectMany(static s => s.Blocks).OfType<Paragraph>().First();
+        NumberingInstance reopenedInstance = Assert.Single(
+            reopened.Numbering.Instances,
+            item => item.Id == paragraph.Format.NumberingId!.Value);
+
+        Assert.Equal(7, Assert.Single(reopenedInstance.Overrides, o => o.Level == 0).StartOverride);
+        Assert.Equal(3, Assert.Single(reopenedInstance.Overrides, o => o.Level == 1).StartOverride);
+    }
+
     private static WordDocument RoundTrip(WordDocument document) => DocReader.Load(DocWriter.Save(document));
 
     private static void Add(WordDocument document, Block block) => document.Sections[0].Blocks.Add(block);

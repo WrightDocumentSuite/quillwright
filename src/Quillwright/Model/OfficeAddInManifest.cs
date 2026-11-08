@@ -93,7 +93,11 @@ public sealed class OfficeAddInVersionOverrides
     /// <summary>The namespace that says which override vocabulary this is.</summary>
     public required string Namespace { get; init; }
 
-    /// <summary>The subtree, namespace declarations included, exactly as it was written.</summary>
+    /// <summary>
+    /// A standalone serialization of the subtree with its in-scope namespace declarations.
+    /// Prefixes and values are preserved, while insignificant lexical details such as quote
+    /// choice, attribute order and empty-element spelling can be normalized.
+    /// </summary>
     public required string Markup { get; init; }
 }
 

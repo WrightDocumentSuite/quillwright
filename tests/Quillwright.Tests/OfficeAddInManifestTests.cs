@@ -173,6 +173,41 @@ public class OfficeAddInManifestTests
         OfficeAddInManifestReader.Read(Encoding.UTF8.GetBytes(manifest))!;
 
     [Fact]
+    public void TheBudgetedEntryPointPreservesTheLegacyResult()
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(MailAppWithOverrides);
+
+        OfficeAddInManifest legacy = OfficeAddInManifestReader.Read(bytes)!;
+        OfficeAddInManifest budgeted = OfficeAddInManifestReader.Read(
+            bytes,
+            Diagnostics.DocumentLoadBudget.Default,
+            TestContext.Current.CancellationToken)!;
+
+        Assert.Equal(legacy.Namespace, budgeted.Namespace);
+        Assert.Equal(legacy.Kind, budgeted.Kind);
+        Assert.Equal(legacy.DeclaredType, budgeted.DeclaredType);
+        Assert.Equal(legacy.Id, budgeted.Id);
+        Assert.Equal(legacy.Hosts, budgeted.Hosts);
+        Assert.Equal(
+            legacy.SourceLocations.Select(static page => (page.Context, page.Url.DefaultValue)),
+            budgeted.SourceLocations.Select(static page => (page.Context, page.Url.DefaultValue)));
+        Assert.Equal(legacy.VersionOverrides[0].Namespace, budgeted.VersionOverrides[0].Namespace);
+        Assert.Equal(legacy.VersionOverrides[0].Markup, budgeted.VersionOverrides[0].Markup);
+    }
+
+    [Fact]
+    public void APreCancelledBudgetedReadStopsBeforeParsing()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.ThrowsAny<OperationCanceledException>(() => OfficeAddInManifestReader.Read(
+            Encoding.UTF8.GetBytes(ContentApp),
+            Diagnostics.DocumentLoadBudget.Default,
+            cancellation.Token));
+    }
+
+    [Fact]
     public void AContentAddIn_SaysWhatItIsAndWhoWroteIt()
     {
         OfficeAddInManifest manifest = Read(ContentApp);
@@ -322,6 +357,20 @@ public class OfficeAddInManifestTests
             "<OfficeApp xmlns=\"http://schemas.microsoft.com/office/appforoffice/1.0\"><Id>1</OfficeApp>")));
         Assert.Null(OfficeAddInManifestReader.Read([]));
         Assert.Null(OfficeAddInManifestReader.Read(Encoding.UTF8.GetBytes("not xml at all")));
+    }
+
+    [Theory]
+    [InlineData("<SecondRoot/>")]
+    [InlineData("<")]
+    public void TrailingMalformedContentIsReadAndRefused(string trailing)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(
+            "<OfficeApp xmlns=\"http://schemas.microsoft.com/office/appforoffice/1.1\"/>" + trailing);
+
+        Assert.Null(OfficeAddInManifestReader.Read(
+            bytes,
+            Diagnostics.DocumentLoadBudget.Default,
+            TestContext.Current.CancellationToken));
     }
 
     /// <summary>

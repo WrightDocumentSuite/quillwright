@@ -43,16 +43,16 @@ internal sealed class FieldTracker
                 return null;
 
             case FieldCharKind.Separate when _open.Count > 0:
-            {
-                State state = _open.Peek();
-                state.InResult = true;
+                {
+                    State state = _open.Peek();
+                    state.InResult = true;
 
-                if (!_compute || Parse(state.Instruction.ToString()) is not { } field)
-                    return null;
+                    if (!_compute || Parse(state.Instruction.ToString()) is not { } field)
+                        return null;
 
-                state.Suppressed = true;
-                return field;
-            }
+                    state.Suppressed = true;
+                    return field;
+                }
 
             case FieldCharKind.End when _open.Count > 0:
                 _open.Pop();

@@ -204,23 +204,33 @@ public sealed partial class HtmlNoteImportTests
     }
 
     [Fact]
-    public async Task ManySiblingFootnoteSections_HonorAsyncImportCancellation()
+    public async Task NoteDiscoveryObservesCancellationAfterAWorkQuantum()
     {
-        const int SectionCount = 100_000;
-        var html = new StringBuilder(SectionCount * 64);
-        for (int index = 0; index < SectionCount; index++)
-            html.Append("<section class=\"footnotes\"></section>");
-
         string path = Path.Combine(Path.GetTempPath(), $"quillwright-html-note-scale-{Guid.NewGuid():N}.html");
         try
         {
-            await File.WriteAllTextAsync(path, html.ToString(), TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(
+                path,
+                "<section class=\"footnotes\"></section>",
+                TestContext.Current.CancellationToken);
             using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken);
-            cancellation.CancelAfter(TimeSpan.FromMilliseconds(1));
+            int observedOperations = -1;
+            var options = new HtmlImportOptions
+            {
+                NoteDiscoveryCancellationCheckpoint = operations =>
+                {
+                    if (operations < 1)
+                        return;
+
+                    observedOperations = operations;
+                    cancellation.Cancel();
+                },
+            };
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                HtmlImporter.ImportFileAsync(path, cancellationToken: cancellation.Token));
+                HtmlImporter.ImportFileAsync(path, options, cancellation.Token));
+            Assert.Equal(1, observedOperations);
         }
         finally
         {

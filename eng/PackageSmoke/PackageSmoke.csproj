@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <IsPackable>false</IsPackable>
+    <!-- Candidate versions and RIDs vary per gate; these locks are verification artifacts. -->
+    <NuGetLockFilePath>$(MSBuildThisFileDirectory)../../artifacts/release-locks/PackageSmoke.packages.lock.json</NuGetLockFilePath>
+    <RestoreLockedMode>false</RestoreLockedMode>
+    <SmokePackageVersion Condition="'$(SmokePackageVersion)' == ''">0.0.0-local</SmokePackageVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Quillwright" Version="$(SmokePackageVersion)" />
+    <PackageReference Include="Quillwright.Doc" Version="$(SmokePackageVersion)" />
+    <PackageReference Include="Quillwright.Pdf" Version="$(SmokePackageVersion)" />
+    <PackageReference Include="Quillwright.Rtf" Version="$(SmokePackageVersion)" />
+    <PackageReference Include="Quillwright.Templates" Version="$(SmokePackageVersion)" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

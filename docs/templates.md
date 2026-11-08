@@ -41,9 +41,18 @@ public partial record Invoice
 }
 ```
 
-The type must be `partial`. Every public property and field takes part unless marked
-`[TemplateIgnore]`; the role is inferred from the type — `bool` is a condition, `ImageData` is
-a picture, everything else is text — and can be stated explicitly with an attribute.
+The type (and any containing types if it is nested) must be `partial`. Every public property
+and field takes part unless marked `[TemplateIgnore]`; the role is inferred from the type —
+`bool` is a condition, `ImageData` is a picture, everything else is text — and can be stated
+explicitly with an attribute.
+
+## Generator diagnostics
+
+| Code | Situation |
+| --- | --- |
+| `QWT001` | A `[WordTemplate]` type or one of its containing types is not `partial` |
+| `QWT002` | The type shape is not supported (static, abstract, ref-like, or file-local) |
+| `QWT003` | A `[TemplateRows]` member is not a sequence of `[WordTemplate]` / `ITemplateModel` items |
 
 ## Marking the template
 
@@ -79,6 +88,12 @@ TemplateResult result = await WordTemplateEngine.RenderAsync("invoice-template.d
 Console.WriteLine($"{result.ValuesFilled} filled, {result.RegionsRepeated} rows, {result.RegionsRemoved} removed");
 foreach (string name in result.UnresolvedNames)
     Console.WriteLine($"the template asks for {name}, which the model does not have");
+```
+
+`RenderAsync` also accepts `Stream` inputs and outputs (leaving both open) as well as optional `LoadOptions` and `SaveOptions`:
+
+```csharp
+TemplateResult result = await WordTemplateEngine.RenderAsync(templateStream, invoice, outputStream);
 ```
 
 To work on a document already in memory:

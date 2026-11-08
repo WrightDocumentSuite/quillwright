@@ -17,16 +17,28 @@ internal static class BuiltInStyles
         "Normal" => new Style(id, StyleKind.Paragraph) { Name = "Normal", IsDefault = true, QuickFormat = true },
         "DefaultParagraphFont" => new Style(id, StyleKind.Character)
         {
-            Name = "Default Paragraph Font", IsDefault = true, SemiHidden = true, UnhideWhenUsed = true, Priority = 1,
+            Name = "Default Paragraph Font",
+            IsDefault = true,
+            SemiHidden = true,
+            UnhideWhenUsed = true,
+            Priority = 1,
         },
         "TableNormal" => new Style(id, StyleKind.Table)
         {
-            Name = "Normal Table", IsDefault = true, SemiHidden = true, UnhideWhenUsed = true, Priority = 99,
+            Name = "Normal Table",
+            IsDefault = true,
+            SemiHidden = true,
+            UnhideWhenUsed = true,
+            Priority = 99,
             TableFormat = TableFormat.Default with { CellMargins = DefaultCellMargins },
         },
         "NoList" => new Style(id, StyleKind.Numbering)
         {
-            Name = "No List", IsDefault = true, SemiHidden = true, UnhideWhenUsed = true, Priority = 99,
+            Name = "No List",
+            IsDefault = true,
+            SemiHidden = true,
+            UnhideWhenUsed = true,
+            Priority = 99,
         },
         "Title" => Title(),
         "Subtitle" => Subtitle(),
@@ -35,12 +47,21 @@ internal static class BuiltInStyles
         "ListParagraph" => ListParagraph(),
         "NoSpacing" => new Style(id, StyleKind.Paragraph)
         {
-            Name = "No Spacing", BasedOn = null, QuickFormat = true, Priority = 1,
+            Name = "No Spacing",
+            BasedOn = null,
+            QuickFormat = true,
+            Priority = 1,
             ParagraphFormat = ParagraphFormat.Default with { SpacingAfter = Length.Zero, LineSpacing = Length.FromTwips(240), LineSpacingRule = LineSpacingRule.Auto },
         },
         "Caption" => new Style(id, StyleKind.Paragraph)
         {
-            Name = "caption", BasedOn = "Normal", NextStyle = "Normal", SemiHidden = true, UnhideWhenUsed = true, QuickFormat = true, Priority = 35,
+            Name = "caption",
+            BasedOn = "Normal",
+            NextStyle = "Normal",
+            SemiHidden = true,
+            UnhideWhenUsed = true,
+            QuickFormat = true,
+            Priority = 35,
             ParagraphFormat = ParagraphFormat.Default with { SpacingAfter = Length.FromTwips(200), LineSpacing = Length.FromTwips(240), LineSpacingRule = LineSpacingRule.Auto },
             RunFormat = RunFormat.Default with { Italic = true, Size = Length.FromHalfPoints(18), Color = HeadingColor },
         },
@@ -48,22 +69,35 @@ internal static class BuiltInStyles
         "Footer" => TabbedStyle(id, "footer", Length.FromInches(3.25), Length.FromInches(6.5)),
         "Hyperlink" => new Style(id, StyleKind.Character)
         {
-            Name = "Hyperlink", BasedOn = "DefaultParagraphFont", UnhideWhenUsed = true, Priority = 99,
+            Name = "Hyperlink",
+            BasedOn = "DefaultParagraphFont",
+            UnhideWhenUsed = true,
+            Priority = 99,
             RunFormat = RunFormat.Default with { Color = WordColor.FromTheme(ThemeColorSlot.Hyperlink), Underline = UnderlineStyle.Single },
         },
         "FollowedHyperlink" => new Style(id, StyleKind.Character)
         {
-            Name = "FollowedHyperlink", BasedOn = "DefaultParagraphFont", SemiHidden = true, UnhideWhenUsed = true, Priority = 99,
+            Name = "FollowedHyperlink",
+            BasedOn = "DefaultParagraphFont",
+            SemiHidden = true,
+            UnhideWhenUsed = true,
+            Priority = 99,
             RunFormat = RunFormat.Default with { Color = WordColor.FromTheme(ThemeColorSlot.FollowedHyperlink), Underline = UnderlineStyle.Single },
         },
         "Strong" => new Style(id, StyleKind.Character)
         {
-            Name = "Strong", BasedOn = "DefaultParagraphFont", QuickFormat = true, Priority = 22,
+            Name = "Strong",
+            BasedOn = "DefaultParagraphFont",
+            QuickFormat = true,
+            Priority = 22,
             RunFormat = RunFormat.Default with { Bold = true, BoldComplexScript = true },
         },
         "Emphasis" => new Style(id, StyleKind.Character)
         {
-            Name = "Emphasis", BasedOn = "DefaultParagraphFont", QuickFormat = true, Priority = 20,
+            Name = "Emphasis",
+            BasedOn = "DefaultParagraphFont",
+            QuickFormat = true,
+            Priority = 20,
             RunFormat = RunFormat.Default with { Italic = true, ItalicComplexScript = true },
         },
         "FootnoteText" => NoteText(id, "footnote text"),
@@ -73,18 +107,33 @@ internal static class BuiltInStyles
         "EndnoteReference" => NoteReferenceStyle(id, "endnote reference"),
         "CommentReference" => new Style(id, StyleKind.Character)
         {
-            Name = "annotation reference", BasedOn = "DefaultParagraphFont", SemiHidden = true, UnhideWhenUsed = true, Priority = 99,
+            Name = "annotation reference",
+            BasedOn = "DefaultParagraphFont",
+            SemiHidden = true,
+            UnhideWhenUsed = true,
+            Priority = 99,
             RunFormat = RunFormat.Default with { Size = Length.FromHalfPoints(16), SizeComplexScript = Length.FromHalfPoints(16) },
         },
         "CommentSubject" => new Style(id, StyleKind.Paragraph)
         {
-            Name = "annotation subject", BasedOn = "CommentText", NextStyle = "CommentText", SemiHidden = true, UnhideWhenUsed = true, Priority = 99,
+            Name = "annotation subject",
+            BasedOn = "CommentText",
+            NextStyle = "CommentText",
+            SemiHidden = true,
+            UnhideWhenUsed = true,
+            Priority = 99,
             RunFormat = RunFormat.Default with { Bold = true, BoldComplexScript = true },
         },
         "TableGrid" => TableGrid(),
         "TOCHeading" => new Style(id, StyleKind.Paragraph)
         {
-            Name = "TOC Heading", BasedOn = "Heading1", NextStyle = "Normal", SemiHidden = true, UnhideWhenUsed = true, QuickFormat = true, Priority = 39,
+            Name = "TOC Heading",
+            BasedOn = "Heading1",
+            NextStyle = "Normal",
+            SemiHidden = true,
+            UnhideWhenUsed = true,
+            QuickFormat = true,
+            Priority = 39,
             ParagraphFormat = ParagraphFormat.Default with { OutlineLevel = null },
         },
         _ when TryHeadingLevel(id, out int level) => Heading(id, level),
@@ -170,7 +219,11 @@ internal static class BuiltInStyles
 
     private static Style Title() => new("Title", StyleKind.Paragraph)
     {
-        Name = "Title", BasedOn = "Normal", NextStyle = "Normal", QuickFormat = true, Priority = 10,
+        Name = "Title",
+        BasedOn = "Normal",
+        NextStyle = "Normal",
+        QuickFormat = true,
+        Priority = 10,
         ParagraphFormat = ParagraphFormat.Default with
         {
             SpacingAfter = Length.Zero,
@@ -180,9 +233,12 @@ internal static class BuiltInStyles
         },
         RunFormat = RunFormat.Default with
         {
-            FontAsciiTheme = "majorHAnsi", FontHighAnsiTheme = "majorHAnsi",
-            FontEastAsiaTheme = "majorEastAsia", FontComplexScriptTheme = "majorBidi",
-            Size = Length.FromHalfPoints(56), SizeComplexScript = Length.FromHalfPoints(56),
+            FontAsciiTheme = "majorHAnsi",
+            FontHighAnsiTheme = "majorHAnsi",
+            FontEastAsiaTheme = "majorEastAsia",
+            FontComplexScriptTheme = "majorBidi",
+            Size = Length.FromHalfPoints(56),
+            SizeComplexScript = Length.FromHalfPoints(56),
             CharacterSpacing = Length.FromTwips(-10),
             Kerning = Length.FromHalfPoints(28),
         },
@@ -190,23 +246,34 @@ internal static class BuiltInStyles
 
     private static Style Subtitle() => new("Subtitle", StyleKind.Paragraph)
     {
-        Name = "Subtitle", BasedOn = "Normal", NextStyle = "Normal", QuickFormat = true, Priority = 11,
+        Name = "Subtitle",
+        BasedOn = "Normal",
+        NextStyle = "Normal",
+        QuickFormat = true,
+        Priority = 11,
         ParagraphFormat = ParagraphFormat.Default with { SpacingAfter = Length.FromTwips(160) },
         RunFormat = RunFormat.Default with
         {
             Color = SubtleColor,
-            Size = Length.FromHalfPoints(28), SizeComplexScript = Length.FromHalfPoints(28),
+            Size = Length.FromHalfPoints(28),
+            SizeComplexScript = Length.FromHalfPoints(28),
             CharacterSpacing = Length.FromTwips(15),
         },
     };
 
     private static Style Quote() => new("Quote", StyleKind.Paragraph)
     {
-        Name = "Quote", BasedOn = "Normal", NextStyle = "Normal", QuickFormat = true, Priority = 29,
+        Name = "Quote",
+        BasedOn = "Normal",
+        NextStyle = "Normal",
+        QuickFormat = true,
+        Priority = 29,
         ParagraphFormat = ParagraphFormat.Default with
         {
-            SpacingBefore = Length.FromTwips(200), SpacingAfter = Length.FromTwips(200),
-            IndentLeft = Length.FromTwips(864), IndentRight = Length.FromTwips(864),
+            SpacingBefore = Length.FromTwips(200),
+            SpacingAfter = Length.FromTwips(200),
+            IndentLeft = Length.FromTwips(864),
+            IndentRight = Length.FromTwips(864),
             Alignment = ParagraphAlignment.Center,
         },
         RunFormat = RunFormat.Default with { Italic = true, Color = SubtleColor },
@@ -214,11 +281,17 @@ internal static class BuiltInStyles
 
     private static Style IntenseQuote() => new("IntenseQuote", StyleKind.Paragraph)
     {
-        Name = "Intense Quote", BasedOn = "Normal", NextStyle = "Normal", QuickFormat = true, Priority = 30,
+        Name = "Intense Quote",
+        BasedOn = "Normal",
+        NextStyle = "Normal",
+        QuickFormat = true,
+        Priority = 30,
         ParagraphFormat = ParagraphFormat.Default with
         {
-            SpacingBefore = Length.FromTwips(360), SpacingAfter = Length.FromTwips(360),
-            IndentLeft = Length.FromTwips(864), IndentRight = Length.FromTwips(864),
+            SpacingBefore = Length.FromTwips(360),
+            SpacingAfter = Length.FromTwips(360),
+            IndentLeft = Length.FromTwips(864),
+            IndentRight = Length.FromTwips(864),
             Alignment = ParagraphAlignment.Center,
             Borders = new BorderSet
             {
@@ -231,13 +304,21 @@ internal static class BuiltInStyles
 
     private static Style ListParagraph() => new("ListParagraph", StyleKind.Paragraph)
     {
-        Name = "List Paragraph", BasedOn = "Normal", QuickFormat = true, UnhideWhenUsed = true, Priority = 34,
+        Name = "List Paragraph",
+        BasedOn = "Normal",
+        QuickFormat = true,
+        UnhideWhenUsed = true,
+        Priority = 34,
         ParagraphFormat = ParagraphFormat.Default with { IndentLeft = Length.FromTwips(720), ContextualSpacing = true },
     };
 
     private static Style TabbedStyle(string id, string name, Length center, Length right) => new(id, StyleKind.Paragraph)
     {
-        Name = name, BasedOn = "Normal", LinkedStyle = null, UnhideWhenUsed = true, Priority = 99,
+        Name = name,
+        BasedOn = "Normal",
+        LinkedStyle = null,
+        UnhideWhenUsed = true,
+        Priority = 99,
         ParagraphFormat = ParagraphFormat.Default with
         {
             SpacingAfter = Length.Zero,
@@ -253,17 +334,27 @@ internal static class BuiltInStyles
 
     private static Style NoteText(string id, string name) => new(id, StyleKind.Paragraph)
     {
-        Name = name, BasedOn = "Normal", SemiHidden = true, UnhideWhenUsed = true, Priority = 99,
+        Name = name,
+        BasedOn = "Normal",
+        SemiHidden = true,
+        UnhideWhenUsed = true,
+        Priority = 99,
         ParagraphFormat = ParagraphFormat.Default with
         {
-            SpacingAfter = Length.Zero, LineSpacing = Length.FromTwips(240), LineSpacingRule = LineSpacingRule.Auto,
+            SpacingAfter = Length.Zero,
+            LineSpacing = Length.FromTwips(240),
+            LineSpacingRule = LineSpacingRule.Auto,
         },
         RunFormat = RunFormat.Default with { Size = Length.FromHalfPoints(20), SizeComplexScript = Length.FromHalfPoints(20) },
     };
 
     private static Style NoteReferenceStyle(string id, string name) => new(id, StyleKind.Character)
     {
-        Name = name, BasedOn = "DefaultParagraphFont", SemiHidden = true, UnhideWhenUsed = true, Priority = 99,
+        Name = name,
+        BasedOn = "DefaultParagraphFont",
+        SemiHidden = true,
+        UnhideWhenUsed = true,
+        Priority = 99,
         RunFormat = RunFormat.Default with { VerticalAlignment = VerticalTextAlignment.Superscript },
     };
 
@@ -272,7 +363,9 @@ internal static class BuiltInStyles
         BorderLine line = BorderLine.Single(Length.FromEighthPoints(4), WordColor.Auto);
         return new Style("TableGrid", StyleKind.Table)
         {
-            Name = "Table Grid", BasedOn = "TableNormal", Priority = 39,
+            Name = "Table Grid",
+            BasedOn = "TableNormal",
+            Priority = 39,
             TableFormat = TableFormat.Default with
             {
                 Borders = BorderSet.AllWithInside(line),

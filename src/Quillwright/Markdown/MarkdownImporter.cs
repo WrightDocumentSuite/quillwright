@@ -396,11 +396,13 @@ public static class MarkdownImporter
             int definitionLine = lines[i].Number;
             var body = new List<Line> { new(first, definitionLine) };
             int end = i + 1;
+            bool hadBlankLine = false;
             while (end < lines.Count)
             {
                 context.CancellationToken.ThrowIfCancellationRequested();
                 string continuation = lines[end].Text;
-                int continuationIndent = continuation.Length - continuation.TrimStart().Length;
+                string continuationTrimmed = continuation.TrimStart();
+                int continuationIndent = continuation.Length - continuationTrimmed.Length;
                 if (continuationIndent >= 4)
                 {
                     body.Add(lines[end].Strip(4));
@@ -408,7 +410,7 @@ public static class MarkdownImporter
                     continue;
                 }
 
-                if (continuation.Trim().Length == 0)
+                if (continuationTrimmed.Length == 0)
                 {
                     int next = end + 1;
                     while (next < lines.Count && lines[next].Text.Trim().Length == 0)
@@ -418,8 +420,18 @@ public static class MarkdownImporter
                     {
                         for (; end < next; end++)
                             body.Add(lines[end] with { Text = string.Empty });
+                        hadBlankLine = true;
                         continue;
                     }
+
+                    break;
+                }
+
+                if (!hadBlankLine && IsLazyNoteContinuation(continuationTrimmed))
+                {
+                    body.Add(lines[end] with { Text = continuationTrimmed });
+                    end++;
+                    continue;
                 }
 
                 break;
@@ -458,6 +470,31 @@ public static class MarkdownImporter
         if (content < text.Length && text[content] is ' ' or '\t')
             content++;
         first = text[content..];
+        return true;
+    }
+
+    private static bool IsLazyNoteContinuation(string trimmed)
+    {
+        if (trimmed.StartsWith("[^", StringComparison.Ordinal))
+            return false;
+
+        if (trimmed.StartsWith('['))
+        {
+            int close = trimmed.IndexOf("]:", StringComparison.Ordinal);
+            if (close > 1 && trimmed[(close + 2)..].Trim().Length > 0)
+                return false;
+        }
+
+        if (Fence(trimmed) is not null ||
+            AtxHeading(trimmed) is not null ||
+            IsThematicBreak(trimmed) ||
+            trimmed.StartsWith('>') ||
+            ListMarker(trimmed) is not null ||
+            IsSetext(trimmed, out _))
+        {
+            return false;
+        }
+
         return true;
     }
 
@@ -616,6 +653,12 @@ public static class MarkdownImporter
 
     private static (bool IsEndnote, int? PreferredId) NoteIdentity(string label)
     {
+        if (int.TryParse(label, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int plainId) &&
+            plainId >= 1)
+        {
+            return (false, plainId);
+        }
+
         const string EndnotePrefix = "en-";
         bool endnote = label.StartsWith(EndnotePrefix, StringComparison.OrdinalIgnoreCase) &&
                        label.Length > EndnotePrefix.Length &&
@@ -1109,6 +1152,21 @@ public static class MarkdownImporter
         int instance = first.Ordered
             ? context.OrderedList >= 0 ? context.OrderedList : context.OrderedList = context.Document.Numbering.AddNumberedList()
             : context.BulletList >= 0 ? context.BulletList : context.BulletList = context.Document.Numbering.AddBulletList();
+
+        if (first.Ordered && first.Number != 1)
+        {
+            int level = Math.Min(depth, 8);
+            NumberingInstance? numberingInstance = context.Document.Numbering.Instances.FirstOrDefault(item => item.Id == instance);
+            if (numberingInstance is not null &&
+                numberingInstance.Overrides.All(overrideItem => overrideItem.Level != level))
+            {
+                numberingInstance.Overrides.Add(new NumberingLevelOverride
+                {
+                    Level = level,
+                    StartOverride = first.Number,
+                });
+            }
+        }
 
         int i = at;
         while (i < to)

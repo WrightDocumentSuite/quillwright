@@ -20,13 +20,35 @@ overloads leave the stream open.
 ## What is written
 
 - Paragraph text, tabs, line/page/column breaks and section boundaries
+- Document metadata in `\info` (`\title`, `\subject`, `\author`, `\operator`, `\keywords`,
+  `\doccomm`, `\*\category`, `\versionN`, `\creatim` and `\revtim`) when any property is set
 - A font table and colour table for the resources used by emitted runs
 - Common direct character formatting: font, bold, italic, capitals, strike, outline, shadow,
   emboss, imprint, visibility, proofing, size, colour, highlight, underline, baseline
   placement, spacing, scale, kerning, position, direction and language
 - Common paragraph formatting: alignment, indents, spacing and line-spacing rule, keep flags,
-  page-break-before, widow control, hyphenation, direction, contextual spacing, outline level
-  and tab stops with leaders
+  page-break-before, widow control, hyphenation, direction, contextual spacing, outline level,
+  numbering (`\lsN`/`\ilvlN`), tab stops with leaders, paragraph borders (`\brdrt`, `\brdrl`,
+  `\brdrb`, `\brdrr`, `\brdrbtw`, `\brdrbar`) and background shading (`\cbpatN`)
+- Section page geometry and column layout: section start (`\sbknone`, `\sbkcol`, `\sbkeven`,
+  `\sbkodd`), orientation (`\lndscpsxn`), page dimensions (`\pgwsxn`, `\pghsxn`), margins and
+  header/footer distances (`\marglsxn`..`\margbsxn`, `\guttersxn`, `\headery`, `\footery`), and
+  equal or custom-width columns (`\cols`, `\colsx`, `\linebetcol`, `\colno`, `\colw`, `\colsr`)
+- Tables (`\trowd`, `\cellxN`, `\intbl`, `\cell`, `\row`, row height/header/keep/alignment,
+  cell widths, table and cell borders `\trbrdr*`/`\clbrdr*`, cell background shading, vertical
+  alignment, horizontal/vertical merges, and multi-paragraph or nested block content inside cells)
+- Named paragraph, character and table styles in `\stylesheet` (`\sN`, `\csN`, `\tsN`,
+  `\sbasedonN`, `\snextN`)
+- Hyperlinks (`{\field{\*\fldinst HYPERLINK ...}{\fldrslt ...}}`) and bookmarks (`{\*\bkmkstart ...}`
+  and `{\*\bkmkend ...}`)
+- Lists and multi-level numbering definitions (`\listtable`, `\listoverridetable` and
+  `\lfolevel` start overrides)
+- Section headers and footers (`\header`, `\headerl`, `\headerf`, `\footer`, `\footerl`,
+  `\footerf`, and `\titlepg`)
+- Footnotes and endnotes (`\footnote`, `\ftnalt`, and `\chftn` reference/number marks)
+- Inline PNG and JPEG pictures (`\pict` with `\pngblip`/`\jpegblip`, `\picwgoalN` and `\pichgoalN`),
+  with their name and alternative text as the `wzName` and `wzDescription` shape properties of
+  `{\*\picprop}`
 - RTF 1.9.1 annotations: `atrfstart`/`atrfend` range bookmarks, `atnid` initials,
   `atnauthor`, second-precision `atntime`, Word-compatible packed `atndate`, `chatn`,
   `annotation`, `atnref`, comment body paragraphs and flat replies through `atnparent -1`
@@ -40,7 +62,7 @@ Saving the same model twice produces the same bytes independently of the current
 RTF is used here as a semantic interchange format. It is not an alternative package for
 preserving arbitrary WordprocessingML or an existing RTF file byte for byte.
 
-- Tables and other unsupported block types are flattened to their visible text.
+- Block content controls and other unsupported block types are flattened to their visible text.
 - Unsupported inline objects are omitted, or replaced by their text when they expose one.
 - Field instructions and deleted runs are not written as visible text; inline wrappers and
   marks are unwrapped.
@@ -63,8 +85,7 @@ preserving arbitrary WordprocessingML or an existing RTF file byte for byte.
 - `atntime` retains wall-clock fields to the second, while the parallel packed `atndate` keeps
   Word compatibility at minute precision. Neither form has a timezone or subsecond field, so
   offset identity and fractional seconds from a `DateTimeOffset` cannot survive the conversion.
-- Named styles, lists, section page geometry, borders, shading, theme-only values and the long
-  tail of Word-specific formatting are not authored yet.
+- Theme-only values and the long tail of Word-specific formatting are not authored yet.
 - Four distinct OOXML font slots collapse to one RTF font when they disagree. A theme colour
   without a resolved RGB value becomes automatic colour.
 

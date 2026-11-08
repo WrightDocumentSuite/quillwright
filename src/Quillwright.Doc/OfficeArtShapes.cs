@@ -26,6 +26,8 @@ internal readonly record struct ShapePosition(int Horizontal, int RelativeToHori
 /// <param name="HasText">Whether the shape holds text.</param>
 /// <param name="Position">How the shape is placed against the page.</param>
 /// <param name="Appearance">What it is painted in.</param>
+/// <param name="Name">The shape's name ([MS-ODRAW] 2.3.4.1, <c>wzName</c>), or <see langword="null"/>.</param>
+/// <param name="Description">Its alternative text ([MS-ODRAW] 2.3.4.2, <c>wzDescription</c>), or <see langword="null"/>.</param>
 internal readonly record struct OfficeArtShape(
     int ShapeId,
     int ShapeType,
@@ -34,7 +36,9 @@ internal readonly record struct OfficeArtShape(
     bool IsGroup,
     bool HasText,
     ShapePosition Position,
-    OfficeArtAppearance Appearance)
+    OfficeArtAppearance Appearance,
+    string? Name = null,
+    string? Description = null)
 {
     /// <summary>Whether the shape displays a picture at all.</summary>
     public bool IsPicture => ImageIndex > 0 || ImageOffset >= 0;
@@ -76,6 +80,7 @@ internal sealed class OfficeArtShapes
     private const ushort ShapeProperties = 0xF00A;
     private const ushort PrimaryOptions = 0xF00B;
     private const ushort ShapeText = 0xF00D;
+    private const ushort TertiaryOptions = 0xF122;
 
     /// <summary>Identifier of the property naming which stored image to display ([MS-ODRAW] 2.3.23.5).</summary>
     private const int ImageProperty = 0x0104;
@@ -94,6 +99,10 @@ internal sealed class OfficeArtShapes
     private const int LineWidthProperty = 0x01CB;
     private const int LineBooleansProperty = 0x01FF;
     private const int GeometryTextProperty = 0x00C0;
+
+    /// <summary>What the selection pane calls the shape and what it says to a screen reader ([MS-ODRAW] 2.3.4.1 and 2.3.4.2).</summary>
+    private const int NameProperty = 0x0380;
+    private const int DescriptionProperty = 0x0381;
 
     /// <summary>
     /// The bits that say a fill or a line is drawn at all, and the bits that say those bits
@@ -152,6 +161,16 @@ internal sealed class OfficeArtShapes
         return shapes.Count == 0 ? Empty : new OfficeArtShapes(shapes);
     }
 
+    /// <summary>
+    /// Reads the shape of an inline picture: the first shape container between two offsets of
+    /// the data stream ([MS-DOC] 2.9.192, <c>OfficeArtInlineSpContainer</c>).
+    /// </summary>
+    /// <param name="data">The data stream.</param>
+    /// <param name="start">Offset of the drawing that follows the picture's header.</param>
+    /// <param name="end">Offset the picture ends at.</param>
+    public static OfficeArtShape? ReadInline(byte[] data, int start, int end) =>
+        OfficeArtRecord.Find(data, start, end, ShapeContainer) is { } container ? Read(data, container) : null;
+
     /// <summary>Gathers every shape between two offsets, descending into groups of them.</summary>
     private static void Collect(byte[] table, int start, int end, Dictionary<int, OfficeArtShape> shapes)
     {
@@ -189,7 +208,10 @@ internal sealed class OfficeArtShapes
                     group = (BinaryPrimitives.ReadUInt32LittleEndian(table.AsSpan(record.Body + 4)) & 0x1) != 0;
                     break;
                 case PrimaryOptions:
-                    ReadOptions(table, record, found);
+                    ReadOptions(table, record, found, labelsOnly: false);
+                    break;
+                case TertiaryOptions:
+                    ReadOptions(table, record, found, labelsOnly: true);
                     break;
                 case ShapeText:
                     text = true;
@@ -199,7 +221,8 @@ internal sealed class OfficeArtShapes
 
         return shapeId >= 0
             ? new OfficeArtShape(
-                shapeId, shapeType, found.Image.Index, found.Image.Offset, group, text, found.Position, found.Appearance)
+                shapeId, shapeType, found.Image.Index, found.Image.Offset, group, text, found.Position, found.Appearance,
+                found.Name, found.Description)
             : null;
     }
 
@@ -207,9 +230,10 @@ internal sealed class OfficeArtShapes
     /// What a shape's property table says: which image it shows, and where it sits. A
     /// property is six bytes; one whose value does not fit in them stores its length instead,
     /// and the values themselves follow the table in the order their properties appear in it,
-    /// so the whole table is walked even when only a few entries are wanted.
+    /// so the whole table is walked even when only a few entries are wanted. Of the tertiary
+    /// table only the name and the alternative text are taken, which newer Word keeps there.
     /// </summary>
-    private static void ReadOptions(byte[] table, OfficeArtRecord options, Options found)
+    private static void ReadOptions(byte[] table, OfficeArtRecord options, Options found, bool labelsOnly)
     {
         int complex = options.Body + (options.Instance * PropertyBytes);
         for (int i = 0; i < options.Instance; i++)
@@ -222,7 +246,8 @@ internal sealed class OfficeArtShapes
             int value = BinaryPrimitives.ReadInt32LittleEndian(table.AsSpan(at + 2));
             bool stored = (identifier & 0x8000) != 0;
 
-            found.Take(identifier & 0x3FFF, value, stored, table, complex);
+            if (!labelsOnly || (identifier & 0x3FFF) is NameProperty or DescriptionProperty)
+                found.Take(identifier & 0x3FFF, value, stored, table, complex);
             if (stored && value > 0)
                 complex += value;
         }
@@ -253,6 +278,10 @@ internal sealed class OfficeArtShapes
 
         public ShapePosition Position { get; private set; } = ShapePosition.Unstated;
 
+        public string? Name { get; private set; }
+
+        public string? Description { get; private set; }
+
         /// <summary>What the shape shows, once every property has been seen.</summary>
         public OfficeArtAppearance Appearance => new(
             Drawn(_fillBooleans, FillOn, FillStated, defaultOn: true) ? OfficeArtAppearance.Color(_fillColor ?? 0) : null,
@@ -278,6 +307,12 @@ internal sealed class OfficeArtShapes
                     return;
                 case GeometryTextProperty when stored:
                     _geometryText = Text(table, complex, value);
+                    return;
+                case NameProperty when stored:
+                    Name = Text(table, complex, value) ?? Name;
+                    return;
+                case DescriptionProperty when stored:
+                    Description = Text(table, complex, value) ?? Description;
                     return;
             }
 
@@ -310,7 +345,7 @@ internal sealed class OfficeArtShapes
         /// <summary>A stored string, which the drawing layer writes as UTF-16 with a trailing nul.</summary>
         private static string? Text(byte[] table, int at, int length)
         {
-            if (length < 2 || at < 0 || at + length > table.Length)
+            if (length < 2 || at < 0 || length > table.Length - at)
                 return null;
 
             string text = System.Text.Encoding.Unicode.GetString(table, at, length).TrimEnd('\0');

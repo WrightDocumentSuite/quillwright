@@ -211,6 +211,7 @@ public sealed class ImageFormatTests
     }
 
     [Fact]
+    [Trait("RequiresMicrosoftFonts", "true")]
     public void AJpegOrPngInADocument_IsEmbeddedWithoutBeingTouched()
     {
         using Rendered rendered = Rendered.Of(WithPicture(Pixels.Png(20, 10), "image/png"));

@@ -130,43 +130,43 @@ internal static class DibReader
         switch (header.BitCount)
         {
             case 1 or 2 or 4 or 8:
-            {
-                int perByte = 8 / header.BitCount;
-                int at = x / perByte;
-                if (at >= row.Length)
-                    return (0, 0xFF);
+                {
+                    int perByte = 8 / header.BitCount;
+                    int at = x / perByte;
+                    if (at >= row.Length)
+                        return (0, 0xFF);
 
-                int shift = 8 - header.BitCount - (x % perByte * header.BitCount);
-                int index = (row[at] >> shift) & ((1 << header.BitCount) - 1);
-                return (Colour(colours, index), 0xFF);
-            }
+                    int shift = 8 - header.BitCount - (x % perByte * header.BitCount);
+                    int index = (row[at] >> shift) & ((1 << header.BitCount) - 1);
+                    return (Colour(colours, index), 0xFF);
+                }
 
             case 16:
-            {
-                int at = x * 2;
-                if (at + 2 > row.Length)
-                    return (0, 0xFF);
+                {
+                    int at = x * 2;
+                    if (at + 2 > row.Length)
+                        return (0, 0xFF);
 
-                return (header.Masks.Apply(BinaryPrimitives.ReadUInt16LittleEndian(row[at..])), 0xFF);
-            }
+                    return (header.Masks.Apply(BinaryPrimitives.ReadUInt16LittleEndian(row[at..])), 0xFF);
+                }
 
             case 24:
-            {
-                int at = x * 3;
-                return at + 3 > row.Length
-                    ? (0, 0xFF)
-                    : ((uint)((row[at + 2] << 16) | (row[at + 1] << 8) | row[at]), (byte)0xFF);
-            }
+                {
+                    int at = x * 3;
+                    return at + 3 > row.Length
+                        ? (0, 0xFF)
+                        : ((uint)((row[at + 2] << 16) | (row[at + 1] << 8) | row[at]), (byte)0xFF);
+                }
 
             case 32:
-            {
-                int at = x * 4;
-                if (at + 4 > row.Length)
-                    return (0, 0xFF);
+                {
+                    int at = x * 4;
+                    if (at + 4 > row.Length)
+                        return (0, 0xFF);
 
-                uint value = BinaryPrimitives.ReadUInt32LittleEndian(row[at..]);
-                return (header.Masks.Apply(value), header.Masks.Alpha(value));
-            }
+                    uint value = BinaryPrimitives.ReadUInt32LittleEndian(row[at..]);
+                    return (header.Masks.Apply(value), header.Masks.Alpha(value));
+                }
 
             default:
                 return (0, 0xFF);

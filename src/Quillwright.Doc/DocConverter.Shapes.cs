@@ -85,6 +85,8 @@ internal static partial class DocConverter
             Height = anchor.Height > 0 ? Length.FromTwips(anchor.Height) : image.NaturalHeight,
             IsInline = false,
             Anchor = Position(anchor, shape.Position),
+            Name = shape.Name,
+            Description = shape.Description,
         };
     }
 
@@ -257,15 +259,16 @@ internal static partial class DocConverter
     private readonly record struct DocStory(int Start, DocShapeTable Shapes, DocTextboxTable Boxes, int TextStart);
 
     /// <summary>
-    /// Reads the charts among the embedded objects. A chart in a legacy document is a
-    /// Microsoft Graph object rather than a part of the format ([MS-OGRAPH]), so it is
-    /// recognised by the program that owns it and read out of the compound file inside it.
+    /// Reads the charts among the embedded objects. A chart in a legacy document is an
+    /// embedded Microsoft Graph or Excel chart object rather than a part of the format
+    /// ([MS-OGRAPH], [MS-XLS]), so it is recognised by the program that owns it and read out
+    /// of the compound file inside it.
     /// </summary>
     private static void ReadCharts(WordDocument document, DocReadContext context)
     {
         foreach (EmbeddedObject embedded in context.EmbeddedObjects)
         {
-            if (embedded.ProgramId?.StartsWith("MSGraph.", StringComparison.OrdinalIgnoreCase) != true)
+            if (!IsChartObject(embedded.ProgramId))
                 continue;
 
             if (GraphChartReader.Read(embedded, context.LoadBudget.Budget) is { } chart)
@@ -280,4 +283,9 @@ internal static partial class DocConverter
                 "A chart was found as an embedded Microsoft Graph object whose data could not be decoded.");
         }
     }
+
+    private static bool IsChartObject(string? programId) =>
+        programId is not null &&
+        (programId.StartsWith("MSGraph.", StringComparison.OrdinalIgnoreCase) ||
+         programId.StartsWith("Excel.Chart.", StringComparison.OrdinalIgnoreCase));
 }

@@ -231,6 +231,7 @@ public sealed class TableTests
     }
 
     [Fact]
+    [Trait("RequiresMicrosoftFonts", "true")]
     public void RowsMoveToTheNextPageWhenTheyRunOut()
     {
         WordDocument document = WordDocument.Create();
@@ -245,6 +246,7 @@ public sealed class TableTests
     }
 
     [Fact]
+    [Trait("RequiresMicrosoftFonts", "true")]
     public void AHeaderRowIsRepeatedOnEveryPage()
     {
         WordDocument document = WordDocument.Create();

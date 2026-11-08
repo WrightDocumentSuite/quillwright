@@ -289,8 +289,7 @@ public class OfficeMathModelTests
     }
 
     private static string Equation(string markup) =>
-        markup[markup.IndexOf("<m:oMath", StringComparison.Ordinal)..
-            (markup.IndexOf("</m:oMath>", StringComparison.Ordinal) + "</m:oMath>".Length)];
+        markup[markup.IndexOf("<m:oMath", StringComparison.Ordinal)..(markup.IndexOf("</m:oMath>", StringComparison.Ordinal) + "</m:oMath>".Length)];
 
     private static async Task<string> MarkupAsync(WordDocument document)
     {

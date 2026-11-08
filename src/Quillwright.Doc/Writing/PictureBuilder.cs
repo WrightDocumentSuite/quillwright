@@ -1,5 +1,6 @@
 using Quillwright.Diagnostics;
 using Quillwright.Model;
+using Quillwright.Primitives;
 using Quillwright.Styles;
 
 namespace Quillwright.Doc.Writing;
@@ -16,7 +17,7 @@ internal sealed class PictureBuilder
 {
     private readonly DocWriteContext _context;
     private readonly List<byte> _data = [];
-    private readonly Dictionary<ImageData, int> _offsets = [];
+    private readonly Dictionary<(ImageData Image, Length Width, Length Height, string? Name, string? Description), int> _offsets = [];
 
     public PictureBuilder(DocWriteContext context) => _context = context;
 
@@ -40,11 +41,14 @@ internal sealed class PictureBuilder
             return;
         }
 
-        if (!_offsets.TryGetValue(picture.Image, out int offset))
+        // The record holds the frame's size and labels as well as the image, so only a picture
+        // identical in all of them can share one.
+        var key = (picture.Image, picture.Width, picture.Height, picture.Name, picture.Description);
+        if (!_offsets.TryGetValue(key, out int offset))
         {
             offset = _data.Count;
             _data.AddRange(OfficeArtWriter.Build(picture));
-            _offsets[picture.Image] = offset;
+            _offsets[key] = offset;
         }
 
         story.WriteSpecial(

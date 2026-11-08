@@ -62,12 +62,12 @@ internal sealed partial class BodyReader
                 xml.Skip();
                 return;
             case "oMath" or "oMathPara" when DocxSchema.IsMathNamespace(xml.NamespaceURI):
-            {
-                string markup = xml.ReadOuterXml();
-                InlineObject equation = OfficeMathReader.Parse(markup) as InlineObject ?? new RawInline(markup, isRunChild: false);
-                paragraph.AppendRunObject(equation, RunFormat.Default, null);
-                return;
-            }
+                {
+                    string markup = xml.ReadOuterXml();
+                    InlineObject equation = OfficeMathReader.Parse(markup) as InlineObject ?? new RawInline(markup, isRunChild: false);
+                    paragraph.AppendRunObject(equation, RunFormat.Default, null);
+                    return;
+                }
 
             default:
                 if (ZeroWidthElements.Contains(name))
@@ -130,16 +130,16 @@ internal sealed partial class BodyReader
         switch (name)
         {
             case "br":
-            {
-                BreakKind kind = OoxmlEnums.ParseBreakKind(XmlHelp.Attr(xml, "type"));
-                BreakClear clear = OoxmlEnums.ParseBreakClear(XmlHelp.Attr(xml, "clear"));
-                if (kind == BreakKind.Line && clear == BreakClear.None)
-                    paragraph.AppendRunText("\n", format, RunKind.Text, attributes);
-                else
-                    paragraph.AppendRunObject(new Break { Kind = kind, Clear = clear }, format, attributes);
-                xml.Skip();
-                return;
-            }
+                {
+                    BreakKind kind = OoxmlEnums.ParseBreakKind(XmlHelp.Attr(xml, "type"));
+                    BreakClear clear = OoxmlEnums.ParseBreakClear(XmlHelp.Attr(xml, "clear"));
+                    if (kind == BreakKind.Line && clear == BreakClear.None)
+                        paragraph.AppendRunText("\n", format, RunKind.Text, attributes);
+                    else
+                        paragraph.AppendRunObject(new Break { Kind = kind, Clear = clear }, format, attributes);
+                    xml.Skip();
+                    return;
+                }
 
             case "sym":
                 paragraph.AppendRunObject(
@@ -199,31 +199,31 @@ internal sealed partial class BodyReader
                 return;
 
             case "AlternateContent" when xml.NamespaceURI == DocxSchema.NsMarkupCompatibility:
-            {
-                IDictionary<string, string> scope = XmlHelp.NamespacesInScope(xml);
-                string markup = xml.ReadOuterXml();
-                InlineObject resolved = MceReader.Read(markup, _context, scope);
-                paragraph.AppendRunObject(resolved is RawInline ? ReadShape(markup, scope) : resolved, format, attributes);
-                return;
-            }
+                {
+                    IDictionary<string, string> scope = XmlHelp.NamespacesInScope(xml);
+                    string markup = xml.ReadOuterXml();
+                    InlineObject resolved = MceReader.Read(markup, _context, scope);
+                    paragraph.AppendRunObject(resolved is RawInline ? ReadShape(markup, scope) : resolved, format, attributes);
+                    return;
+                }
 
             case "pict":
-            {
-                IDictionary<string, string> scope = XmlHelp.NamespacesInScope(xml);
-                paragraph.AppendRunObject(ReadShape(xml.ReadOuterXml(), scope), format, attributes);
-                return;
-            }
+                {
+                    IDictionary<string, string> scope = XmlHelp.NamespacesInScope(xml);
+                    paragraph.AppendRunObject(ReadShape(xml.ReadOuterXml(), scope), format, attributes);
+                    return;
+                }
 
             case "object":
-            {
-                // The markup goes back exactly as it came; reading it only registers what the
-                // package holds, so that a caller can find the object and pull it out.
-                string markup = xml.ReadOuterXml();
-                if (EmbeddedObjectReader.Read(markup, _context) is { } embedded)
-                    _context.Document.EmbeddedObjectList.Add(embedded);
-                paragraph.AppendRunObject(new RawInline(markup), format, attributes);
-                return;
-            }
+                {
+                    // The markup goes back exactly as it came; reading it only registers what the
+                    // package holds, so that a caller can find the object and pull it out.
+                    string markup = xml.ReadOuterXml();
+                    if (EmbeddedObjectReader.Read(markup, _context) is { } embedded)
+                        _context.Document.EmbeddedObjectList.Add(embedded);
+                    paragraph.AppendRunObject(new RawInline(markup), format, attributes);
+                    return;
+                }
 
             default:
                 paragraph.AppendRunObject(new RawInline(xml.ReadOuterXml()), format, attributes);

@@ -167,6 +167,28 @@ public class GraphChartTests
     public void AGraphObjectWithNoSeries_IsNotAChart() =>
         Assert.Null(GraphChartReader.Read(Object(new GraphWorkbook().Build())));
 
+    [Fact]
+    public void AnExcelChartWithSeriesIndexCache_YieldsCachedValuesAndCategories()
+    {
+        byte[] content = GraphWorkbook.BuildExcelCachedChart("Series 1", ["Category 1", "Category 2"], [4.3, 2.5]);
+        var embedded = new EmbeddedObject
+        {
+            Location = "ObjectPool/_1",
+            ProgramId = "Excel.Chart.8",
+            DisplayName = "Microsoft Excel Chart",
+            Content = content,
+        };
+
+        Chart? chart = GraphChartReader.Read(embedded);
+
+        Assert.NotNull(chart);
+        Assert.Equal(ChartKind.Bar, chart.Kind);
+        ChartSeries series = Assert.Single(chart.Series);
+        Assert.Equal("Series 1", series.Name);
+        Assert.Equal(["Category 1", "Category 2"], series.Categories);
+        Assert.Equal([4.3d, 2.5d], series.Values);
+    }
+
     private static GraphWorkbook Sales()
     {
         var workbook = new GraphWorkbook();

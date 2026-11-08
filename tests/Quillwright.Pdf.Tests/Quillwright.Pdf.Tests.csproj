@@ -13,6 +13,7 @@
     <!-- The accessibility validator lives in Inkwright's layout package, which the exporter itself
          does not need; the tests use it to check what they produced. -->
     <PackageReference Include="Inkwright.Layout" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
@@ -20,8 +21,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="coverlet.msbuild" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.v3.mtp-off" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
 

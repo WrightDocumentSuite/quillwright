@@ -1,9 +1,9 @@
 # Loading untrusted input
 
-Every public document importer applies a finite `DocumentLoadBudget` by default. The shared
-budget is intentionally large enough for real office files, including highly compressed legacy
-corpus documents, but prevents an input from growing without bound through ZIP expansion,
-markup nesting, external images or embedded objects.
+Every public document importer, and the standalone Office add-in manifest reader, applies a
+finite `DocumentLoadBudget` by default. The shared budget is intentionally large enough for real
+office files, including highly compressed legacy corpus documents, but prevents an input from
+growing without bound through ZIP expansion, markup nesting, external images or embedded objects.
 
 ```csharp
 using Quillwright.Diagnostics;
@@ -37,10 +37,10 @@ one malformed-or-refused-input catch path while sharing policy with the other im
 
 | Budget property | Work it limits |
 | --- | --- |
-| `MaxInputBytes` | Compressed DOCX/RTF bytes, the complete CFB `.doc`, and encoded HTML/Markdown files |
+| `MaxInputBytes` | Compressed DOCX/RTF bytes, the complete CFB `.doc`, encoded HTML/Markdown files, and an already-buffered Office add-in manifest |
 | `MaxPackageParts` | OPC ZIP entries and CFB directory entries |
 | `MaxInflatedBytes`, `MaxPartBytes` | Total and per-part OPC expansion; declared CFB stream payloads |
-| `MaxXmlCharactersPerPart`, `MaxXmlNodes`, `MaxXmlDepth` | XML parts read or preserved from an OPC package |
+| `MaxXmlCharactersPerPart`, `MaxXmlNodes`, `MaxXmlDepth` | XML parts read or preserved from an OPC package, plus standalone Office add-in manifest XML and retained manifest strings/override markup |
 | `MaxTextCharacters` | Decoded HTML, Markdown and RTF source |
 | `MaxLines` | HTML and Markdown source lines |
 | `MaxMarkupNodes` | HTML tree construction and Markdown block/inline parsing |
@@ -78,6 +78,7 @@ WordDocument doc = await DocReader.LoadWithOptionsAsync("upload.doc", new DocImp
 HtmlImportResult html = HtmlImporter.Import(sourceHtml, new HtmlImportOptions { Budget = budget });
 MarkdownImportResult markdown = MarkdownImporter.Import(sourceMarkdown, new MarkdownImportOptions { Budget = budget });
 RtfImportResult rtf = RtfReader.Load(sourceRtf, new RtfImportOptions { Budget = budget });
+OfficeAddInManifest? addIn = OfficeAddInManifestReader.Read(manifestBytes, budget, cancellationToken);
 ```
 
 `DocxReader.OpenWithOptionsAsync(path, loadOptions)` uses the same OPC limits while yielding blocks.
@@ -88,3 +89,15 @@ the `RtfFormatException` behavior described above.
 Raising a limit is an explicit trust decision. A larger ceiling permits a larger allocation;
 it does not turn preservation-first DOCX loading into a streaming operation. For text extraction
 where the full model is unnecessary, prefer `DocxReader` and still pass a budget.
+
+`OfficeAddInManifestReader.Read(byte[])` remains available and uses `DocumentLoadBudget.Default`.
+Its budgeted overload checks input bytes before XML parsing, rejects DTDs and external entities,
+counts every XML node (including nodes inside `VersionOverrides`), and checks cancellation between
+nodes and while strings are materialized. Traversal is iterative, so hostile nesting stops at
+`MaxXmlDepth` without consuming the call stack. Malformed XML returns `null`; a budget breach and
+cancellation remain distinguishable exceptions.
+
+The manifest API intentionally starts from a complete `byte[]`. `MaxInputBytes` rejects an
+oversized array but cannot undo the allocation or network transfer that produced it. A service
+must therefore bound the download or file read before allocating that array, then pass the same
+policy to the reader.

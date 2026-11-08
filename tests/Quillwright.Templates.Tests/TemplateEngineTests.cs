@@ -143,6 +143,42 @@ public class TemplateEngineTests
         Assert.Single(template.Media);
     }
 
+    [Fact]
+    public async Task RenderAsync_StreamAndBinderOverloads_FillTemplateAndLeaveStreamsOpen()
+    {
+        WordDocument template = WordDocument.Create();
+        template.Sections[0].AddParagraph("Customer: {{Customer}} (#{{Number}})");
+
+        using var input = new MemoryStream();
+        await template.SaveAsync(input, cancellationToken: TestContext.Current.CancellationToken);
+        input.Position = 0;
+
+        using var output = new MemoryStream();
+        TemplateResult result = await WordTemplateEngine.RenderAsync(
+            input,
+            Sample(),
+            output,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, result.ValuesFilled);
+        Assert.True(input.CanRead);
+        Assert.True(output.CanWrite);
+
+        output.Position = 0;
+        WordDocument rendered = await WordDocument.LoadAsync(output, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("Customer: ООО «Ромашка» (#INV-7)", rendered.GetText());
+
+        input.Position = 0;
+        using var binderOutput = new MemoryStream();
+        TemplateResult binderResult = await WordTemplateEngine.RenderAsync(
+            input,
+            Sample(),
+            Invoice.TemplateBinder,
+            binderOutput,
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(2, binderResult.ValuesFilled);
+    }
+
     private static WordDocument RenderConditional(bool hasNotes)
     {
         WordDocument template = WordDocument.Create();

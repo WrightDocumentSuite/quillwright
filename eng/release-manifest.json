@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "repositoryUrl": "https://github.com/WrightDocumentSuite/quillwright.git",
+  "projectUrl": "https://github.com/WrightDocumentSuite/quillwright",
+  "rawSourceUrl": "https://raw.githubusercontent.com/WrightDocumentSuite/quillwright/{commit}/*",
+  "baselineVersion": "0.2.4",
+  "packages": [
+    {
+      "id": "Quillwright",
+      "project": "src/Quillwright/Quillwright.csproj",
+      "dependencies": []
+    },
+    {
+      "id": "Quillwright.Doc",
+      "project": "src/Quillwright.Doc/Quillwright.Doc.csproj",
+      "dependencies": [
+        {
+          "id": "Quillwright",
+          "version": "{packageVersion}",
+          "exclude": "Build,Analyzers"
+        }
+      ]
+    },
+    {
+      "id": "Quillwright.Pdf",
+      "project": "src/Quillwright.Pdf/Quillwright.Pdf.csproj",
+      "dependencies": [
+        {
+          "id": "Quillwright",
+          "version": "{packageVersion}",
+          "exclude": "Build,Analyzers"
+        },
+        {
+          "id": "Inkwright",
+          "version": "[0.1.4]",
+          "exclude": "Build,Analyzers"
+        },
+        {
+          "id": "System.Security.Cryptography.Pkcs",
+          "version": "10.0.13",
+          "exclude": "Build,Analyzers"
+        }
+      ]
+    },
+    {
+      "id": "Quillwright.Rtf",
+      "project": "src/Quillwright.Rtf/Quillwright.Rtf.csproj",
+      "dependencies": [
+        {
+          "id": "Quillwright",
+          "version": "{packageVersion}",
+          "exclude": "Build,Analyzers"
+        }
+      ]
+    },
+    {
+      "id": "Quillwright.Templates",
+      "project": "src/Quillwright.Templates/Quillwright.Templates.csproj",
+      "requiredPackageEntries": [
+        "analyzers/dotnet/cs/Quillwright.Templates.Generator.dll"
+      ],
+      "dependencies": [
+        {
+          "id": "Quillwright",
+          "version": "{packageVersion}",
+          "exclude": "Build,Analyzers"
+        }
+      ]
+    }
+  ]
+}

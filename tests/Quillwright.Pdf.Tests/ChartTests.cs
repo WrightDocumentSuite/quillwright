@@ -143,6 +143,43 @@ public sealed class ChartTests
     }
 
     [Fact]
+    public async Task AnAreaChart_FillsPolygonUnderSeriesAndStrokesTopLine()
+    {
+        WordDocument document = await LoadAsync(Part("areaChart", [("A", 2), ("B", 5), ("C", 3)]));
+
+        using Rendered rendered = Rendered.Of(document);
+        string content = Encoding.Latin1.GetString(rendered.Document.Pages[0].GetContent());
+
+        Assert.Contains(content.Split('\n'), static line => line == "f");
+        Assert.Contains(content.Split('\n'), static line => line == "S");
+    }
+
+    [Fact]
+    public async Task ARadarChart_DrawsWebSpokesAndSeriesRing()
+    {
+        WordDocument document = await LoadAsync(Part("radarChart", [("Speed", 8), ("Power", 6), ("Range", 9)]));
+
+        using Rendered rendered = Rendered.Of(document);
+        string content = Encoding.Latin1.GetString(rendered.Document.Pages[0].GetContent());
+
+        Assert.Empty(rendered.Diagnostics);
+        Assert.Contains("Speed", string.Concat(rendered.Lines()), StringComparison.Ordinal);
+        Assert.True(content.Split('\n').Count(static line => line == "S") >= 8);
+    }
+
+    [Fact]
+    public async Task ABubbleChart_DrawsCirclesForEachPoint()
+    {
+        WordDocument document = await LoadAsync(Part("bubbleChart", [("North", 10), ("South", 20)]));
+
+        using Rendered rendered = Rendered.Of(document);
+        string content = Encoding.Latin1.GetString(rendered.Document.Pages[0].GetContent());
+
+        Assert.Empty(rendered.Diagnostics);
+        Assert.Equal(2, content.Split('\n').Count(static line => line == "f"));
+    }
+
+    [Fact]
     public async Task AChartOfAKindThatCannotBeDrawn_KeepsItsSpaceAndSaysSo()
     {
         WordDocument document = await LoadAsync(Part("surfaceChart", [("A", 1), ("B", 2)]));

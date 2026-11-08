@@ -1,7 +1,7 @@
 # Rendering to PDF
 
 `Quillwright.Pdf` turns a `WordDocument` into a PDF: it paginates the text with real font
-metrics and draws the result through [Inkwright](../../../PDFLib/Inkwright/README.md). No
+metrics and draws the result through [Inkwright](https://github.com/WrightDocumentSuite/inkwright). No
 external tool is shelled out to, so it runs the same on a build agent as on a desktop.
 
 ```csharp
@@ -166,8 +166,9 @@ A mathematical font carries stretchy variants of every bracket and a table of ho
 each script; none of that can be assumed of the fonts a document names, so a bracket that has to
 grow is drawn at a larger size and the offsets are the proportions Word uses.
 
-**Charts.** A chart is drawn from the numbers the document cached for it: bars, lines, areas and
-scatters against a value axis ruled and labelled at round numbers, and pies and doughnuts as
+**Charts.** A chart is drawn from the numbers the document cached for it: bars, lines, filled areas
+and scatters (with point markers) against a value axis ruled and labelled at round numbers, radar
+spider-web polygons with radial axes, and pies and doughnuts as
 wedges, in the accent colours Office uses, with the title over the plot and a legend under it.
 Every other kind keeps its space and says in the diagnostics that it was not drawn — a surface
 plot drawn as a bar chart would be worse than nothing. Nothing about the chart part's own
@@ -333,7 +334,7 @@ being approximated into something that looks right and is not.
 - **Content taller than its text box.** The box does not grow; the content is cut off at its
   bottom edge, the way Word cuts it when the box is not allowed to grow.
 - **Shapes whose markup states no size.**
-- **A chart of a kind that cannot be drawn from cached values** — bubble, radar, surface and
+- **A chart of a kind that cannot be drawn from cached values** — surface and
   stock — and every chart's own styling: its fills, its gradients, its data labels.
 - **A floating chart**, which is drawn where it is anchored rather than where it floats.
 - **SmartArt.**

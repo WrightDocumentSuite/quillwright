@@ -11,6 +11,135 @@ namespace Quillwright.Tests;
 
 public sealed class DocumentLoadBudgetTests
 {
+    private const string ManifestNamespace =
+        "http://schemas.microsoft.com/office/appforoffice/1.1";
+
+    [Fact]
+    public void OfficeAddInManifest_ExactInputAndXmlMetricsAreAccepted()
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(
+            $"<OfficeApp xmlns=\"{ManifestNamespace}\"><Id>budget</Id></OfficeApp>");
+        XmlMetrics metrics = MeasureXml(bytes);
+        DocumentLoadBudget exact = DocumentLoadBudget.Default with
+        {
+            MaxInputBytes = bytes.LongLength,
+            MaxXmlCharactersPerPart = MinimumXmlCharacterLimit(bytes),
+            MaxXmlNodes = metrics.Nodes,
+            MaxXmlDepth = metrics.Depth,
+        };
+
+        OfficeAddInManifest manifest = OfficeAddInManifestReader.Read(
+            bytes, exact, TestContext.Current.CancellationToken)!;
+
+        Assert.Equal("budget", manifest.Id);
+    }
+
+    [Fact]
+    public void OfficeAddInManifest_EachCeilingFailsWithStableLimitIdentity()
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(
+            $"<OfficeApp xmlns=\"{ManifestNamespace}\"><Id>budget</Id></OfficeApp>");
+        XmlMetrics metrics = MeasureXml(bytes);
+        DocumentLoadBudget exact = DocumentLoadBudget.Default with
+        {
+            MaxInputBytes = bytes.LongLength,
+            MaxXmlCharactersPerPart = MinimumXmlCharacterLimit(bytes),
+            MaxXmlNodes = metrics.Nodes,
+            MaxXmlDepth = metrics.Depth,
+        };
+        (string Name, DocumentLoadBudget Budget)[] cases =
+        [
+            (nameof(DocumentLoadBudget.MaxInputBytes), exact with { MaxInputBytes = bytes.LongLength - 1 }),
+            (nameof(DocumentLoadBudget.MaxXmlCharactersPerPart), exact with
+            {
+                MaxXmlCharactersPerPart = exact.MaxXmlCharactersPerPart - 1,
+            }),
+            (nameof(DocumentLoadBudget.MaxXmlNodes), exact with { MaxXmlNodes = metrics.Nodes - 1 }),
+            (nameof(DocumentLoadBudget.MaxXmlDepth), exact with { MaxXmlDepth = metrics.Depth - 1 }),
+        ];
+
+        foreach ((string name, DocumentLoadBudget budget) in cases)
+        {
+            DocumentLoadLimitException error = Assert.Throws<DocumentLoadLimitException>(
+                () => OfficeAddInManifestReader.Read(
+                    bytes, budget, TestContext.Current.CancellationToken));
+            Assert.Equal(name, error.LimitName);
+        }
+    }
+
+    [Fact]
+    public void OfficeAddInManifest_DeepXmlStopsAtBudgetWithoutRecursiveTraversal()
+    {
+        const int nesting = 2_048;
+        string xml = $"<OfficeApp xmlns=\"{ManifestNamespace}\">" +
+            string.Concat(Enumerable.Repeat("<Layer>", nesting)) +
+            "<Id>too deep</Id>" +
+            string.Concat(Enumerable.Repeat("</Layer>", nesting)) +
+            "</OfficeApp>";
+
+        DocumentLoadLimitException error = Assert.Throws<DocumentLoadLimitException>(() =>
+            OfficeAddInManifestReader.Read(
+                Encoding.UTF8.GetBytes(xml),
+                DocumentLoadBudget.Default with { MaxXmlDepth = 64 },
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(nameof(DocumentLoadBudget.MaxXmlDepth), error.LimitName);
+        Assert.Equal(65, error.Observed);
+    }
+
+    [Fact]
+    public void OfficeAddInManifest_CountsNodesInsideVersionOverridesAndCollections()
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(
+            $"<OfficeApp xmlns=\"{ManifestNamespace}\">" +
+            "<Hosts><Host Name=\"One\"/><Host Name=\"Two\"/></Hosts>" +
+            "<VersionOverrides xmlns=\"urn:override\"><Resources><Item/></Resources></VersionOverrides>" +
+            "</OfficeApp>");
+        XmlMetrics metrics = MeasureXml(bytes);
+        DocumentLoadBudget exact = DocumentLoadBudget.Default with
+        {
+            MaxXmlNodes = metrics.Nodes,
+            MaxXmlDepth = metrics.Depth,
+        };
+
+        OfficeAddInManifest accepted = OfficeAddInManifestReader.Read(
+            bytes, exact, TestContext.Current.CancellationToken)!;
+        Assert.Equal(["One", "Two"], accepted.Hosts);
+        Assert.Single(accepted.VersionOverrides);
+
+        DocumentLoadLimitException error = Assert.Throws<DocumentLoadLimitException>(() =>
+            OfficeAddInManifestReader.Read(
+                bytes,
+                exact with { MaxXmlNodes = metrics.Nodes - 1 },
+                TestContext.Current.CancellationToken));
+        Assert.Equal(nameof(DocumentLoadBudget.MaxXmlNodes), error.LimitName);
+    }
+
+    [Fact]
+    public void OfficeAddInManifest_OverrideMaterializationCannotMultiplyPastTheXmlBudget()
+    {
+        string inheritedNamespace = "urn:shared:" + new string('x', 256);
+        string overrides = string.Concat(Enumerable.Range(1, 8).Select(index =>
+            $"<VersionOverrides xmlns=\"urn:override:{index}\"><shared:Item/></VersionOverrides>"));
+        byte[] bytes = Encoding.UTF8.GetBytes(
+            $"<OfficeApp xmlns=\"{ManifestNamespace}\" xmlns:shared=\"{inheritedNamespace}\">" +
+            overrides +
+            "</OfficeApp>");
+        long exactXmlCharacters = MinimumXmlCharacterLimit(bytes);
+
+        DocumentLoadLimitException error = Assert.Throws<DocumentLoadLimitException>(() =>
+            OfficeAddInManifestReader.Read(
+                bytes,
+                DocumentLoadBudget.Default with
+                {
+                    MaxXmlCharactersPerPart = exactXmlCharacters,
+                },
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(nameof(DocumentLoadBudget.MaxXmlCharactersPerPart), error.LimitName);
+        Assert.True(error.Observed > exactXmlCharacters);
+    }
+
     [Fact]
     public async Task Docx_BoundaryBudgetAcceptsExactPackageMetrics()
     {
@@ -691,6 +820,21 @@ public sealed class DocumentLoadBudgetTests
         return low;
     }
 
+    private static XmlMetrics MeasureXml(byte[] xml)
+    {
+        using XmlReader reader = XmlReader.Create(
+            new MemoryStream(xml, writable: false), Quillwright.Xml.XmlDefaults.ReaderSettings);
+        long nodes = 0;
+        int depth = 0;
+        while (reader.Read())
+        {
+            nodes++;
+            depth = Math.Max(depth, reader.Depth + 1);
+        }
+
+        return new XmlMetrics(nodes, depth);
+    }
+
     private static bool FitsXmlCharacterLimit(byte[] xml, long limit)
     {
         try
@@ -716,6 +860,8 @@ public sealed class DocumentLoadBudgetTests
         long XmlNodes,
         long LargestXmlCharacters,
         int XmlDepth);
+
+    private sealed record XmlMetrics(long Nodes, int Depth);
 
     private sealed record RelatedPart(
         string EntryName,

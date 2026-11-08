@@ -252,7 +252,7 @@ bytes — deflated XML behind an eight-byte signature — and it says who holds 
 | Incremental source generators | `Quillwright.Templates.Generator` |
 | Collection expressions and slice patterns | Throughout |
 | `GeneratedRegex` | Template placeholder scanning |
-| `IsAotCompatible` + nullable everywhere | All three runtime packages |
+| `IsAotCompatible` + nullable everywhere | All five runtime packages |
 
 ## Deliberate limits
 
@@ -299,7 +299,9 @@ What follows is why.
   `OfficeAddInManifestReader` take the bytes and hand back what they say. The lock reader covers
   the whole of `CT_CALocks` but authors nothing and speaks no protocol; the manifest reader
   covers the metadata the two base namespaces share and returns `VersionOverrides` as markup
-  rather than pretending to model four more vocabularies.
+  rather than pretending to model four more vocabularies. Manifest traversal is iterative and
+  uses the common `DocumentLoadBudget` for bytes, XML characters, nodes, depth and retained
+  markup; cancellation is checked throughout the traversal.
 - **Text boxes are containers; the shapes around them are not modelled.** The words inside a
   text box are reachable from `AllContainers`, so replace and text extraction find them, while
   the geometry, fill and wrapping are kept as the bytes they arrived as. Word writes the same

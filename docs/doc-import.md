@@ -96,6 +96,9 @@ without losing its place. That is what makes it safe to understand only what mat
   a device-independent bitmap gets the file header a `.bmp` needs put back on. A PICT is carried
   across as `image/pict` media — nothing here draws QuickDraw, and a renderer downstream may not
   either, but the bytes reach the package intact rather than being dropped
+- A picture's name and alternative text, from the `wzName` and `wzDescription` properties of
+  its shape ([MS-ODRAW] 2.3.4.1 and 2.3.4.2), inline or floating; the tertiary property table
+  is read for these two alone
 - Floating pictures, resolved through the drawing layer ([MS-ODRAW]): the anchor in the text
   names a shape, the shape's `pib` property names a place in the store the whole document
   shares, and that is where the image bytes are. They arrive as a `Picture` with
@@ -107,7 +110,7 @@ without losing its place. That is what makes it safe to understand only what mat
   anchor ([MS-DOC] 2.9.253) and the `posh`/`posrelh`/`posv`/`posrelv` properties of the drawing
   ([MS-ODRAW] 2.3.4.19-2.3.4.22), the latter being what distinguishes a centred watermark from
   one at the top-left corner
-- Numbering definitions, their levels and the label patterns
+- Numbering definitions, their levels, the label patterns and per-override starting numbers (`LFOLVL`)
 - Page, line and column breaks
 - Macros, decoded out of the `Macros` storage into module names and source; see
   [macros.md](macros.md)
@@ -115,9 +118,10 @@ without losing its place. That is what makes it safe to understand only what mat
   header ([MS-DOC] 2.3.6 and 2.3.7)
 - Embedded objects, out of the `ObjectPool` storage: the program that owns them, their bytes,
   and the plain file they wrap when they wrap one
-- Charts, decoded out of the embedded Microsoft Graph object they are stored as ([MS-OGRAPH]):
-  the series, their names, their categories and their values, read from the grid of cells in
-  the object's own `Workbook` stream. The styling stays inside the object, which is preserved
+- Charts, decoded out of the embedded Microsoft Graph or Excel chart object they are stored as
+  ([MS-OGRAPH], [MS-XLS]): the series, their names, their categories and their values, read from
+  the grid of cells or the cached `SIIndex` series blocks in the object's own `Workbook` stream.
+  The styling stays inside the object, which is preserved
 - Custom document properties, out of the user-defined half of the document summary
 - The password of an encrypted document, given one: pass it to `DocReader.Load`
 

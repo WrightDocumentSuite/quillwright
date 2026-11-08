@@ -17,10 +17,7 @@ internal static class OpenXmlAssert
     /// <summary>Fails when the package does not validate against the Word 2019 schema.</summary>
     public static void Valid(Stream package, string because)
     {
-        package.Position = 0;
-        using WordprocessingDocument document = WordprocessingDocument.Open(package, isEditable: false);
-        var validator = new OpenXmlValidator(FileFormatVersions.Office2019);
-        List<ValidationErrorInfo> errors = [.. validator.Validate(document).Where(IsNotTheSdksOwnGap)];
+        List<ValidationErrorInfo> errors = ValidationErrors(package);
         if (errors.Count == 0)
             return;
 
@@ -28,6 +25,20 @@ internal static class OpenXmlAssert
             Environment.NewLine,
             errors.Take(15).Select(e => $"{e.ErrorType} at {e.Path?.XPath}: {e.Description}"));
         Assert.Fail($"{because}: {errors.Count} validation error(s).{Environment.NewLine}{report}");
+    }
+
+    /// <summary>
+    /// Whether a package validates against the Word 2019 schema, after excluding the SDK's
+    /// known Strict <c>lvlJc</c> gap described below.
+    /// </summary>
+    public static bool ValidatesCleanly(Stream package) => ValidationErrors(package).Count == 0;
+
+    private static List<ValidationErrorInfo> ValidationErrors(Stream package)
+    {
+        package.Position = 0;
+        using WordprocessingDocument document = WordprocessingDocument.Open(package, isEditable: false);
+        var validator = new OpenXmlValidator(FileFormatVersions.Office2019);
+        return [.. validator.Validate(document).Where(IsNotTheSdksOwnGap)];
     }
 
     /// <summary>

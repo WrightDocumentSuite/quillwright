@@ -186,25 +186,25 @@ internal sealed partial class HtmlTreeBuilder
                 return;
 
             case "a":
-            {
-                for (int i = _formatting.Count - 1; i >= 0; i--)
                 {
-                    if (_formatting[i] is not { } entry)
-                        break;
-
-                    if (entry.Is("a"))
+                    for (int i = _formatting.Count - 1; i >= 0; i--)
                     {
-                        AdoptionAgency(token);
-                        _formatting.Remove(entry);
-                        _stack.Remove(entry);
-                        break;
-                    }
-                }
+                        if (_formatting[i] is not { } entry)
+                            break;
 
-                ReconstructFormatting();
-                PushFormatting(InsertElement(token));
-                return;
-            }
+                        if (entry.Is("a"))
+                        {
+                            AdoptionAgency(token);
+                            _formatting.Remove(entry);
+                            _stack.Remove(entry);
+                            break;
+                        }
+                    }
+
+                    ReconstructFormatting();
+                    PushFormatting(InsertElement(token));
+                    return;
+                }
 
             case "b" or "big" or "code" or "em" or "font" or "i" or "s" or "small" or "strike" or "strong"
                 or "tt" or "u":

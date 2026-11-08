@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: true
+  NUGET_XMLDOC_MODE: skip
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the public snapshot
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the pinned .NET feature band
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore Quillwright.slnx
+      - name: Verify formatting
+        run: dotnet format Quillwright.slnx --verify-no-changes --no-restore --severity warn
+
+  build-and-test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - windows-2025
+    steps:
+      - name: Check out the public snapshot
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the pinned .NET feature band
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Install deterministic PDF test fonts
+        if: runner.os == 'Linux'
+        run: bash ./eng/install-linux-fonts.sh
+      - name: Restore
+        run: dotnet restore Quillwright.slnx
+      - name: Clean Release rebuild
+        run: >-
+          dotnet build Quillwright.slnx --configuration Release --no-restore
+          -t:Rebuild -p:ContinuousIntegrationBuild=true
+      - name: Test the full suite on Windows
+        if: runner.os == 'Windows'
+        run: dotnet test Quillwright.slnx --configuration Release --no-build --no-restore
+      - name: Test the Linux-compatible suite
+        if: runner.os == 'Linux'
+        run: >-
+          dotnet test Quillwright.slnx --configuration Release --no-build --no-restore
+          --filter "RequiresMicrosoftFonts!=true"
+
+  coverage:
+    name: Coverage ratchet
+    runs-on: windows-2025
+    steps:
+      - name: Check out the public snapshot
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install the pinned .NET feature band
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Restore
+        run: dotnet restore Quillwright.slnx
+      - name: Build once before Coverlet instrumentation
+        run: >-
+          dotnet build Quillwright.slnx --configuration Release --no-restore
+          -t:Rebuild -p:ContinuousIntegrationBuild=true
+      - name: Enforce coverage threshold
+        shell: pwsh
+        run: ./eng/coverage.ps1 -NoRestore -NoBuild
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: coverage-${{ github.sha }}
+          path: artifacts/coverage/coverage.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  packages:
+    name: Packages, API compatibility, Source Link, and AOT
+    if: github.repository == 'WrightDocumentSuite/quillwright'
+    needs:
+      - format
+      - build-and-test
+      - coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the public snapshot
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the pinned .NET feature band
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Install deterministic PDF test fonts
+        run: bash ./eng/install-linux-fonts.sh
+      - name: Build and verify candidate packages
+        shell: pwsh
+        run: >-
+          ./eng/release.ps1
+          -OutputDirectory artifacts/release/packages
+          -NuGetPackagesDirectory artifacts/release/nuget-packages
+          -SkipTests
+      - name: Upload verified packages
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: quillwright-packages-${{ github.sha }}
+          path: artifacts/release/packages/
+          if-no-files-found: error
+          retention-days: 14

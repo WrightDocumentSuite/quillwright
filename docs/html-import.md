@@ -72,7 +72,9 @@ decoded string and rejecting it afterward.
 | Entities | The characters they name: the common names and every numeric form |
 | `<title>` | `document.Properties.Title` |
 
-Whitespace collapses the way browsers collapse it, except inside `pre`. A `script`, `style`,
+Whitespace collapses the way browsers collapse it, except inside `pre`. The space that survives
+a collapse keeps the formatting of the text it came from, so in `see <u>this</u>` the space is
+not underlined, and a space before a link stays outside the hyperlink. A `script`, `style`,
 `form`, `iframe` or media element has no document counterpart and is left out with a
 diagnostic naming it and its line; an element the importer does not model is unwrapped around its content rather than dropped,
 with a diagnostic naming it as well. A remote image is never fetched — nothing in

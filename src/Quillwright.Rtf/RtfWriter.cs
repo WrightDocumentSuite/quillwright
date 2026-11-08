@@ -7,7 +7,7 @@ using Quillwright.Styles;
 namespace Quillwright.Rtf;
 
 /// <summary>Exports a Quillwright document as deterministic Rich Text Format.</summary>
-public static class RtfWriter
+public static partial class RtfWriter
 {
     /// <summary>Builds an RTF file in memory.</summary>
     /// <param name="document">Document to export.</param>
@@ -19,20 +19,28 @@ public static class RtfWriter
 
         var diagnostics = new RtfExportDiagnostics();
         var annotations = new AnnotationExportContext(document, diagnostics);
+        var notes = new NoteExportContext(document);
 
         ExportResources resources = ExportResources.Create(document);
         var builder = new StringBuilder();
         builder.Append("{\\rtf1\\ansi\\ansicpg1252\\uc1\\deff0");
         resources.Write(builder);
+        WriteStyleSheet(builder, diagnostics, resources);
+        WriteNumberingTables(builder, document, diagnostics, resources);
+        WriteDocumentInfo(builder, document.Properties);
         builder.Append('\n');
 
         for (int sectionIndex = 0; sectionIndex < document.Sections.Count; sectionIndex++)
         {
             if (sectionIndex > 0)
-                builder.Append("\\sect\n");
+                builder.Append("\\sect\\sectd\n");
 
-            foreach (Block block in document.Sections[sectionIndex].Blocks)
-                WriteBlock(builder, block, diagnostics, resources, annotations);
+            Section section = document.Sections[sectionIndex];
+            WriteSectionProperties(builder, section.Properties);
+            WriteSectionHeadersAndFooters(builder, section, diagnostics, resources, notes);
+
+            foreach (Block block in section.Blocks)
+                WriteBlock(builder, block, diagnostics, resources, annotations, notes);
         }
 
         annotations.ReportUnemitted(diagnostics);
@@ -77,11 +85,18 @@ public static class RtfWriter
         Block block,
         RtfExportDiagnostics diagnostics,
         ExportResources resources,
-        AnnotationExportContext? annotations)
+        AnnotationExportContext? annotations,
+        NoteExportContext? notes = null)
     {
         if (block is Paragraph paragraph)
         {
-            WriteParagraph(builder, paragraph, diagnostics, resources, annotations);
+            WriteParagraph(builder, paragraph, diagnostics, resources, annotations, notes: notes);
+            return;
+        }
+
+        if (block is Table table)
+        {
+            WriteTable(builder, table, diagnostics, resources, annotations, notes);
             return;
         }
 
@@ -106,20 +121,31 @@ public static class RtfWriter
         ExportResources resources,
         AnnotationExportContext? annotations,
         bool annotationReference = false,
-        bool insideAnnotation = false)
+        bool insideAnnotation = false,
+        NoteExportContext? notes = null,
+        bool inTable = false,
+        bool suppressTrailingPar = false,
+        bool insideNote = false)
     {
         builder.Append("\\pard");
-        ParagraphFormat paragraphFormat = insideAnnotation && paragraph.Format.StyleId == "CommentText"
-            ? paragraph.Format with { StyleId = null }
-            : paragraph.Format;
-        WriteParagraphFormat(builder, paragraphFormat, diagnostics);
+        if (inTable)
+            builder.Append("\\intbl");
+
+        ParagraphFormat paragraphFormat = paragraph.Format;
+        if (insideAnnotation && paragraphFormat.StyleId == "CommentText" ||
+            insideNote && paragraphFormat.StyleId is "FootnoteText" or "EndnoteText")
+        {
+            paragraphFormat = paragraphFormat with { StyleId = null };
+        }
+
+        WriteParagraphFormat(builder, paragraphFormat, diagnostics, resources);
         builder.Append(' ');
 
         if (annotationReference)
             builder.Append("{\\plain\\chatn }");
 
-        if (paragraph.Marks.Any(static item => item.Mark is not (CommentRangeStart or CommentRangeEnd)) ||
-            paragraph.Ranges.Any())
+        if (paragraph.Marks.Any(static item => item.Mark is not (CommentRangeStart or CommentRangeEnd or BookmarkStart or BookmarkEnd)) ||
+            paragraph.Ranges.Any(static item => item.Range is not Hyperlink))
         {
             diagnostics.Add(
                 RtfExportWarningKind.FormattingDropped,
@@ -127,51 +153,108 @@ public static class RtfWriter
                 "inline-ranges");
         }
 
+        List<(int Start, int End, Hyperlink Link)> hyperlinks =
+        [
+            .. paragraph.Ranges
+                .Where(static item => item.Length > 0 && item.Range is Hyperlink)
+                .Select(static item => (item.Start, item.Start + item.Length, (Hyperlink)item.Range)),
+        ];
+
         using IEnumerator<(int Offset, InlineMark Mark)> marks = paragraph.Marks.GetEnumerator();
         bool hasMark = marks.MoveNext();
+        int openHyperlinks = 0;
 
         foreach (Run run in paragraph.Runs)
         {
             if (run.Kind is RunKind.FieldInstruction or RunKind.Deleted or RunKind.DeletedFieldInstruction)
                 continue;
 
-            builder.Append("{\\plain");
-            bool isCommentReferenceRun = annotations is not null &&
-                run.Length == 1 &&
-                paragraph.ObjectAt(run.Start) is CommentReference;
-            if (!isCommentReferenceRun)
-                WriteRunFormat(builder, run.Format, diagnostics, resources);
-            builder.Append(' ');
-
-            int end = run.Start + run.Length;
+            int runEnd = run.Start + run.Length;
+            List<(int Start, int End)> segments = SplitRunSegments(run.Start, runEnd, hyperlinks);
             ReadOnlySpan<char> text = paragraph.AsSpan();
-            for (int offset = run.Start; offset < end; offset++)
+
+            foreach ((int segStart, int segEnd) in segments)
             {
-                while (hasMark && marks.Current.Offset <= offset)
+                foreach ((_, int linkEnd, _) in hyperlinks)
                 {
-                    WriteMark(builder, marks.Current.Mark, diagnostics, annotations);
+                    if (linkEnd == segStart && openHyperlinks > 0)
+                    {
+                        builder.Append("}}");
+                        openHyperlinks--;
+                    }
+                }
+
+                while (hasMark && marks.Current.Offset <= segStart)
+                {
+                    WriteMark(builder, marks.Current.Mark, diagnostics, annotations, resources);
                     hasMark = marks.MoveNext();
                 }
 
-                if (paragraph.ObjectAt(offset) is { } value)
+                foreach ((int linkStart, _, Hyperlink link) in hyperlinks)
                 {
-                    WriteObject(builder, value, diagnostics, resources, annotations);
-                    continue;
+                    if (linkStart == segStart)
+                    {
+                        WriteHyperlinkStart(builder, link);
+                        openHyperlinks++;
+                    }
                 }
 
-                WriteCharacter(builder, text[offset]);
-            }
+                builder.Append("{\\plain");
+                InlineObject? singleObject = run.Length == 1 ? paragraph.ObjectAt(run.Start) : null;
+                bool isCommentReferenceRun = annotations is not null && singleObject is CommentReference;
+                if (!isCommentReferenceRun)
+                {
+                    RunFormat runFormat = run.Format.StyleId is "FootnoteReference" or "EndnoteReference"
+                        ? run.Format with { StyleId = null }
+                        : run.Format;
+                    WriteRunFormat(builder, runFormat, diagnostics, resources);
+                }
+                builder.Append(' ');
 
-            builder.Append('}');
+                for (int offset = segStart; offset < segEnd; offset++)
+                {
+                    while (hasMark && marks.Current.Offset <= offset)
+                    {
+                        WriteMark(builder, marks.Current.Mark, diagnostics, annotations, resources);
+                        hasMark = marks.MoveNext();
+                    }
+
+                    if (paragraph.ObjectAt(offset) is { } value)
+                    {
+                        WriteObject(builder, value, diagnostics, resources, annotations, notes);
+                        continue;
+                    }
+
+                    WriteCharacter(builder, text[offset]);
+                }
+
+                builder.Append('}');
+
+                foreach ((_, int linkEnd, _) in hyperlinks)
+                {
+                    if (linkEnd == segEnd && openHyperlinks > 0)
+                    {
+                        builder.Append("}}");
+                        openHyperlinks--;
+                    }
+                }
+            }
+        }
+
+        while (openHyperlinks > 0)
+        {
+            builder.Append("}}");
+            openHyperlinks--;
         }
 
         while (hasMark)
         {
-            WriteMark(builder, marks.Current.Mark, diagnostics, annotations);
+            WriteMark(builder, marks.Current.Mark, diagnostics, annotations, resources);
             hasMark = marks.MoveNext();
         }
 
-        builder.Append("\\par\n");
+        if (!suppressTrailingPar)
+            builder.Append("\\par\n");
     }
 
     private static void WriteRunFormat(
@@ -180,6 +263,13 @@ public static class RtfWriter
         RtfExportDiagnostics diagnostics,
         ExportResources resources)
     {
+        if (format.StyleId is { Length: > 0 } styleId &&
+            styleId != "DefaultParagraphFont" &&
+            resources.TryGetStyleIndex(styleId, out int styleIndex))
+        {
+            AppendControl(builder, "cs", styleIndex);
+        }
+
         string? font = PrimaryFont(format);
         if (font is not null)
             AppendControl(builder, "f", resources.FontIndex(font));
@@ -252,12 +342,15 @@ public static class RtfWriter
 
         RunFormat supported = RunFormat.Default with
         {
+            StyleId = format.StyleId,
             FontAscii = format.FontAscii,
             FontHighAnsi = format.FontHighAnsi,
             FontEastAsia = format.FontEastAsia,
             FontComplexScript = format.FontComplexScript,
             Bold = format.Bold,
+            BoldComplexScript = format.BoldComplexScript == format.Bold ? format.BoldComplexScript : null,
             Italic = format.Italic,
+            ItalicComplexScript = format.ItalicComplexScript == format.Italic ? format.ItalicComplexScript : null,
             Caps = format.Caps,
             SmallCaps = format.SmallCaps,
             Strike = format.Strike,
@@ -275,6 +368,7 @@ public static class RtfWriter
             Kerning = format.Kerning,
             Position = format.Position,
             Size = format.Size,
+            SizeComplexScript = format.SizeComplexScript == format.Size ? format.SizeComplexScript : null,
             Highlight = format.Highlight,
             Underline = format.Underline,
             UnderlineColor = format.UnderlineColor,
@@ -294,8 +388,16 @@ public static class RtfWriter
     private static void WriteParagraphFormat(
         StringBuilder builder,
         ParagraphFormat format,
-        RtfExportDiagnostics diagnostics)
+        RtfExportDiagnostics diagnostics,
+        ExportResources resources)
     {
+        if (format.StyleId is { Length: > 0 } styleId &&
+            styleId != "Normal" &&
+            resources.TryGetStyleIndex(styleId, out int styleIndex))
+        {
+            AppendControl(builder, "s", styleIndex);
+        }
+
         if (format.Alignment is ParagraphAlignment alignment)
         {
             builder.Append(alignment switch
@@ -342,16 +444,29 @@ public static class RtfWriter
             builder.Append(rightToLeft ? "\\rtlpar" : "\\ltrpar");
         if (format.OutlineLevel is int outlineLevel)
             AppendControl(builder, "outlinelevel", Math.Clamp(outlineLevel, 0, 8));
+        if (format.NumberingId is int numberingId)
+        {
+            AppendControl(builder, "ls", numberingId);
+            AppendControl(builder, "ilvl", Math.Clamp(format.NumberingLevel ?? 0, 0, 8));
+        }
         foreach (TabStop tab in format.Tabs)
             WriteTabStop(builder, tab, diagnostics);
+        WriteParagraphBorders(builder, format.Borders, diagnostics, resources);
+        if (format.Shading?.Fill is WordColor fill && fill.Kind != ColorKind.Auto)
+            AppendControl(builder, "cbpat", resources.ColorIndex(fill, diagnostics));
 
         ParagraphFormat supported = ParagraphFormat.Default with
         {
+            StyleId = format.StyleId,
             KeepWithNext = format.KeepWithNext,
             KeepLinesTogether = format.KeepLinesTogether,
             PageBreakBefore = format.PageBreakBefore,
             WidowControl = format.WidowControl,
+            NumberingId = format.NumberingId,
+            NumberingLevel = format.NumberingLevel,
             SuppressLineNumbers = format.SuppressLineNumbers,
+            Borders = format.Borders,
+            Shading = format.Shading,
             SuppressAutoHyphens = format.SuppressAutoHyphens,
             RightToLeft = format.RightToLeft,
             SpacingBefore = format.SpacingBefore,
@@ -476,10 +591,24 @@ public static class RtfWriter
         StringBuilder builder,
         InlineMark mark,
         RtfExportDiagnostics diagnostics,
-        AnnotationExportContext? annotations)
+        AnnotationExportContext? annotations,
+        ExportResources resources)
     {
         switch (mark)
         {
+            case BookmarkStart bkmkStart when !string.IsNullOrWhiteSpace(bkmkStart.Name):
+                builder.Append("{\\*\\bkmkstart ");
+                WriteText(builder, bkmkStart.Name);
+                builder.Append('}');
+                return;
+            case BookmarkEnd bkmkEnd:
+                if (resources.TryGetBookmarkName(bkmkEnd.Id, out string? bkmkName) && !string.IsNullOrWhiteSpace(bkmkName))
+                {
+                    builder.Append("{\\*\\bkmkend ");
+                    WriteText(builder, bkmkName);
+                    builder.Append('}');
+                }
+                return;
             case CommentRangeStart start when annotations is not null:
                 annotations.WriteRangeMark(builder, start.Id, isStart: true, diagnostics);
                 return;
@@ -500,7 +629,8 @@ public static class RtfWriter
         InlineObject value,
         RtfExportDiagnostics diagnostics,
         ExportResources resources,
-        AnnotationExportContext? annotations)
+        AnnotationExportContext? annotations,
+        NoteExportContext? notes = null)
     {
         if (value is Break lineBreak)
         {
@@ -521,6 +651,9 @@ public static class RtfWriter
             annotations.WriteAnnotation(builder, commentReference.Id, diagnostics, resources);
             return;
         }
+
+        if (TryWriteFeatureObject(builder, value, diagnostics, resources, notes))
+            return;
 
         diagnostics.Add(
             RtfExportWarningKind.UnsupportedInline,
@@ -911,29 +1044,101 @@ public static class RtfWriter
     {
         private readonly Dictionary<string, int> _fonts;
         private readonly Dictionary<uint, int> _colors;
+        private readonly Dictionary<int, string> _bookmarkNames;
+        private readonly Dictionary<string, int> _styleIndices;
+        private readonly List<(Style Style, int Index)> _orderedStyles;
 
-        private ExportResources(Dictionary<string, int> fonts, Dictionary<uint, int> colors)
+        private ExportResources(
+            Dictionary<string, int> fonts,
+            Dictionary<uint, int> colors,
+            Dictionary<int, string> bookmarkNames,
+            Dictionary<string, int> styleIndices,
+            List<(Style Style, int Index)> orderedStyles,
+            bool hasStylesToExport)
         {
             _fonts = fonts;
             _colors = colors;
+            _bookmarkNames = bookmarkNames;
+            _styleIndices = styleIndices;
+            _orderedStyles = orderedStyles;
+            HasStylesToExport = hasStylesToExport;
         }
+
+        public bool HasStylesToExport { get; }
+
+        public IReadOnlyList<(Style Style, int Index)> OrderedStyles => _orderedStyles;
+
+        public bool TryGetBookmarkName(int id, out string? name) => _bookmarkNames.TryGetValue(id, out name);
+
+        public bool TryGetStyleIndex(string styleId, out int index) => _styleIndices.TryGetValue(styleId, out index);
 
         public static ExportResources Create(WordDocument document)
         {
             string defaultFont = PrimaryFont(document.Styles.DefaultRunFormat) ?? "Times New Roman";
             var fontNames = new HashSet<string>(StringComparer.Ordinal) { defaultFont };
             var colors = new HashSet<uint>();
+            var bookmarkNames = new Dictionary<int, string>();
+            var referencedStyleIds = new HashSet<string>(StringComparer.Ordinal);
 
-            foreach (Section section in document.Sections)
+            foreach (BlockContainer container in document.AllContainers)
             {
-                foreach (Paragraph paragraph in section.Blocks.OfType<Paragraph>())
-                    AddParagraphResources(paragraph, fontNames, colors);
+                foreach (Block block in container.Blocks)
+                    AddBlockResources(block, fontNames, colors, bookmarkNames, referencedStyleIds);
             }
 
-            foreach (Comment comment in document.Comments)
+            foreach (AbstractNumbering abstractDef in document.Numbering.Definitions)
             {
-                foreach (Paragraph paragraph in comment.Blocks.OfType<Paragraph>())
-                    AddParagraphResources(paragraph, fontNames, colors);
+                foreach (NumberingLevel level in abstractDef.Levels)
+                {
+                    if (PrimaryFont(level.RunFormat) is { Length: > 0 } font)
+                        fontNames.Add(font);
+                    AddColor(colors, level.RunFormat.Color);
+                    AddColor(colors, level.RunFormat.UnderlineColor);
+                    AddColor(colors, level.ParagraphFormat.Shading?.Fill);
+                    AddBorderSetColors(colors, level.ParagraphFormat.Borders);
+                }
+            }
+
+            bool hasCustomOrModifiedStyles = document.Styles.All.Any(static s =>
+                s.IsCustom ||
+                (s.Id is not ("Normal" or "DefaultParagraphFont" or "TableNormal" or "NoList" or
+                    "FootnoteText" or "EndnoteText" or "FootnoteReference" or "EndnoteReference" or
+                    "CommentText" or "CommentReference" or "CommentSubject")) ||
+                (s.Id is "Normal" or "DefaultParagraphFont" or "TableNormal" or "NoList" &&
+                    (!s.ParagraphFormat.IsEmpty || !s.RunFormat.IsEmpty)));
+            bool hasStylesToExport = hasCustomOrModifiedStyles ||
+                referencedStyleIds.Any(static id => id is not ("Normal" or "DefaultParagraphFont" or "FootnoteText" or "EndnoteText" or "FootnoteReference" or "EndnoteReference" or "CommentText" or "CommentReference"));
+
+            var styleIndices = new Dictionary<string, int>(StringComparer.Ordinal);
+            var orderedStyles = new List<(Style Style, int Index)>();
+            if (hasStylesToExport)
+            {
+                int nextStyleIndex = 0;
+                foreach (Style style in document.Styles.All.Where(static s => s.Kind is StyleKind.Paragraph or StyleKind.Character or StyleKind.Table))
+                {
+                    int idx = style.Id == "Normal" ? 0 : ++nextStyleIndex;
+                    if (styleIndices.TryAdd(style.Id, idx))
+                    {
+                        orderedStyles.Add((style, idx));
+                        AddRunFormatResources(style.RunFormat, fontNames, colors);
+                        AddColor(colors, style.ParagraphFormat.Shading?.Fill);
+                        AddBorderSetColors(colors, style.ParagraphFormat.Borders);
+                    }
+                }
+
+                foreach (string refId in referencedStyleIds)
+                {
+                    if (styleIndices.ContainsKey(refId))
+                        continue;
+
+                    Style style = document.Styles.GetOrAdd(refId);
+                    int idx = ++nextStyleIndex;
+                    styleIndices.Add(style.Id, idx);
+                    orderedStyles.Add((style, idx));
+                    AddRunFormatResources(style.RunFormat, fontNames, colors);
+                    AddColor(colors, style.ParagraphFormat.Shading?.Fill);
+                    AddBorderSetColors(colors, style.ParagraphFormat.Borders);
+                }
             }
 
             string[] orderedFonts =
@@ -950,7 +1155,7 @@ public static class RtfWriter
             for (int index = 0; index < orderedColors.Length; index++)
                 colorIndexes.Add(orderedColors[index], index + 1);
 
-            return new ExportResources(fontIndexes, colorIndexes);
+            return new ExportResources(fontIndexes, colorIndexes, bookmarkNames, styleIndices, orderedStyles, hasStylesToExport);
         }
 
         public int FontIndex(string font) => _fonts[font];
@@ -1004,20 +1209,89 @@ public static class RtfWriter
                 colors.Add(rgb.Rgb);
         }
 
+        private static void AddBlockResources(
+            Block block,
+            HashSet<string> fontNames,
+            HashSet<uint> colors,
+            Dictionary<int, string> bookmarkNames,
+            HashSet<string> referencedStyleIds)
+        {
+            if (block is Paragraph paragraph)
+            {
+                AddParagraphResources(paragraph, fontNames, colors, bookmarkNames, referencedStyleIds);
+                return;
+            }
+
+            if (block is Table table)
+            {
+                if (table.Format.StyleId is { Length: > 0 } tableStyleId)
+                    referencedStyleIds.Add(tableStyleId);
+                AddBorderSetColors(colors, table.Format.Borders);
+
+                foreach (TableRow row in table.Rows)
+                {
+                    foreach (TableCell cell in row.Cells)
+                    {
+                        AddColor(colors, cell.Format.Shading?.Fill);
+                        AddBorderSetColors(colors, cell.Format.Borders);
+                        foreach (Block child in cell.Blocks)
+                            AddBlockResources(child, fontNames, colors, bookmarkNames, referencedStyleIds);
+                    }
+                }
+            }
+        }
+
+        private static void AddBorderSetColors(HashSet<uint> colors, BorderSet? borders)
+        {
+            if (borders is null)
+                return;
+
+            AddColor(colors, borders.Top?.Color);
+            AddColor(colors, borders.Left?.Color);
+            AddColor(colors, borders.Bottom?.Color);
+            AddColor(colors, borders.Right?.Color);
+            AddColor(colors, borders.InsideHorizontal?.Color);
+            AddColor(colors, borders.InsideVertical?.Color);
+            AddColor(colors, borders.Bar?.Color);
+        }
+
         private static void AddParagraphResources(
             Paragraph paragraph,
             HashSet<string> fontNames,
-            HashSet<uint> colors)
+            HashSet<uint> colors,
+            Dictionary<int, string> bookmarkNames,
+            HashSet<string> referencedStyleIds)
         {
+            if (paragraph.Format.StyleId is { Length: > 0 } paraStyleId)
+                referencedStyleIds.Add(paraStyleId);
+            AddColor(colors, paragraph.Format.Shading?.Fill);
+            AddBorderSetColors(colors, paragraph.Format.Borders);
+
+            foreach ((_, InlineMark mark) in paragraph.Marks)
+            {
+                if (mark is BookmarkStart bkmkStart && !string.IsNullOrWhiteSpace(bkmkStart.Name))
+                    bookmarkNames.TryAdd(bkmkStart.Id, bkmkStart.Name);
+            }
+
             foreach (Run run in paragraph.Runs)
             {
-                if (PrimaryFont(run.Format) is { Length: > 0 } font)
-                    fontNames.Add(font);
-                AddColor(colors, run.Format.Color);
-                AddColor(colors, run.Format.UnderlineColor);
-                if (run.Format.Highlight is HighlightColor highlight && HighlightRgb(highlight) is uint rgb)
-                    colors.Add(rgb);
+                if (run.Format.StyleId is { Length: > 0 } runStyleId)
+                    referencedStyleIds.Add(runStyleId);
+                AddRunFormatResources(run.Format, fontNames, colors);
             }
+        }
+
+        private static void AddRunFormatResources(
+            RunFormat format,
+            HashSet<string> fontNames,
+            HashSet<uint> colors)
+        {
+            if (PrimaryFont(format) is { Length: > 0 } font)
+                fontNames.Add(font);
+            AddColor(colors, format.Color);
+            AddColor(colors, format.UnderlineColor);
+            if (format.Highlight is HighlightColor highlight && HighlightRgb(highlight) is uint rgb)
+                colors.Add(rgb);
         }
 
         private static uint? HighlightRgb(HighlightColor highlight) => highlight switch

@@ -15,10 +15,13 @@ await doc.SaveAsync("agreement.docx");
 
 ## What it does
 
-- **Edits real documents without breaking them.** Charts, SmartArt, embedded objects, custom
-  XML, themes and VBA are carried through byte for byte. Verified against 934 documents
-  produced by Word over two decades: every one round-trips with no part lost, identical text,
-  and no new schema violation.
+- **Edits real documents without breaking their copy-through content.** Charts, SmartArt,
+  embedded objects, custom XML, themes and VBA are carried through byte for byte. In the
+  current 934-file Open XML SDK 3.5.1/Telerik reference snapshot, 932 unencrypted packages
+  save and reload with identical extracted text, every original relationship record and every
+  non-relationship OPC part still present, and every copy-through part hash-identical. The two
+  password-protected fixtures are separate expected-refusal tests; validator-clean inputs must
+  remain validator-clean after save.
 - **Data-oriented paragraphs.** A paragraph is one text buffer with runs, hyperlinks,
   bookmarks and comment ranges laid over it as offset ranges. `paragraph.Text` is free, and
   find-and-replace across run boundaries is an ordinary splice rather than a stitching job.

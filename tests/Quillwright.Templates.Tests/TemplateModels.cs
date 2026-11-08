@@ -29,3 +29,17 @@ public partial record Invoice
     [TemplateImage(WidthCentimeters = 2, HeightCentimeters = 1)]
     public ImageData? Logo { get; init; }
 }
+
+public static partial class NestedTemplatesContainer
+{
+    [WordTemplate]
+    public sealed partial record KeywordAndNestedModel
+    {
+        public required string @class { get; init; }
+
+        [TemplateField("Line\nBreak\"Field")]
+        public required string @event { get; init; }
+
+        public bool @default { get; init; }
+    }
+}
