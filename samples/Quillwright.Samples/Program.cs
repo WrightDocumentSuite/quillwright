@@ -9,4 +9,7 @@ await EditExistingDocument.RunAsync(output);
 await FillTemplate.RunAsync(output);
 await StreamLargeReport.RunAsync(output);
 await ExtractText.RunAsync(output);
+await MarkdownRoundTrip.RunAsync(output);
+await HtmlPreview.RunAsync(output);
+await CompareRevisions.RunAsync(output);
 Console.WriteLine("Done.");

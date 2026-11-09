@@ -130,3 +130,7 @@ never shown is not what the caller meant.
 - [Editing, search and revisions](editing.md) — the cursor, find and replace, tracked changes
 - [Streaming](streaming.md) — generating and reading without a model
 - [Templates](templates.md) — filling documents from typed models
+
+## More runnable examples
+
+See the [sample catalog](../samples/README.md) for markdown, html preview, compare versions, expected output files and run instructions. Each new example creates its own input and verifies the saved result.
