@@ -170,14 +170,17 @@ await markdown.SaveAsync("quarterly-markdown");
 
 ## Performance
 
-20 000 paragraphs, .NET 10 on an i7-8700; details and the full method list in
-[docs/benchmarks.md](docs/benchmarks.md).
+Measured on 2026-11-09 with Quillwright 0.2.5, .NET SDK 10.0.403 and runtime 10.0.14 on a shared Xeon Gold 5412U server. Full confidence intervals, exact versions and source commit are in [docs/benchmarks.md](docs/benchmarks.md).
 
-| | Generate | Allocated | Read | Allocated |
+20,000 paragraphs.
+
+| Method | Write mean | Allocated | Read mean | Allocated |
 | --- | ---: | ---: | ---: | ---: |
-| **Quillwright streaming** | **26.6 ms** | **17.8 MB** | **27.7 ms** | 16.8 MB |
-| Quillwright model | 43.4 ms | 21.8 MB | 39.6 ms | 18.3 MB |
-| Open XML SDK 3.5 | 69.2 ms | 18.7 MB | 101.2 ms | **15.8 MB** |
+| QuillwrightStreaming | 12.350 ms | 17.824 MiB | 19.335 ms | 18.839 MiB |
+| QuillwrightModel | 19.537 ms | 18.328 MiB | 21.108 ms | 20.343 MiB |
+| OpenXmlSdk | 27.021 ms | 18.721 MiB | 41.831 ms | 15.772 MiB |
+
+Shared-host timings include background-load variation. Compare methods within this snapshot; the older i7-8700 tables describe a different environment.
 
 ## Packages
 

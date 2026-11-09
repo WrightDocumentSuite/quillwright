@@ -1,0 +1,318 @@
+{
+  "schemaVersion": 1,
+  "measuredDate": "2026-11-09",
+  "library": "Quillwright",
+  "version": "0.2.5",
+  "sourceRepository": "https://github.com/WrightDocumentSuite/quillwright.git",
+  "sourceCommit": "afc415dd3947fce79dc79663a84cd93526d528f2",
+  "host": {
+    "os": "Microsoft Windows Server 2025 Datacenter",
+    "build": "26100",
+    "cpu": [
+      {
+        "Name": "Intel(R) Xeon(R) Gold 5412U",
+        "NumberOfCores": 24,
+        "NumberOfLogicalProcessors": 48,
+        "MaxClockSpeed": 2100
+      }
+    ],
+    "memoryGiB": 255.677,
+    "shared": true,
+    "culture": "ru-RU",
+    "fonts": [
+      {
+        "Name": "arial.ttf",
+        "Exists": true,
+        "SHA256": "5F9F2D8104AD5E69E1BE8107224063DC8C36F9E24680B2F9BE324244C0B424A1"
+      },
+      {
+        "Name": "times.ttf",
+        "Exists": true,
+        "SHA256": "FBB57CDB0079137ADC0E478913CA134DFEE02AA2EF443738EC5E839BF97A1F7F"
+      },
+      {
+        "Name": "calibri.ttf",
+        "Exists": true,
+        "SHA256": "57E93FF143572BCC092C1F56202D43DDC07BB119AA104C6D7AF163470FB551F6"
+      },
+      {
+        "Name": "segoeui.ttf",
+        "Exists": true,
+        "SHA256": "8134DBCD09E7B123C9A7F229D49CFFBCB01352CC72EA5E1076B65D0DCA9F73CD"
+      }
+    ],
+    "benchmarkDotNetOsVersion": "Windows 11 (10.0.26100.33296/24H2/2024Update/HudsonValley)"
+  },
+  "sdkVersion": "10.0.403",
+  "runtimeVersion": ".NET 10.0.14 (10.0.14, 10.0.1426.52326)",
+  "benchmarkDotNetVersion": "0.15.8",
+  "assemblies": [
+    {
+      "File": "BenchmarkDotNet.Annotations.dll",
+      "ProductVersion": "0.15.8+1e8238ef6c08e18821edae83ac8d6b0a2bb1bb98",
+      "FileVersion": "0.15.8",
+      "SHA256": "4B5D273032CAE7C8FC97E16713B8D4F1EE3A2AA28A0E2BD0695232FB9DD7D558"
+    },
+    {
+      "File": "BenchmarkDotNet.dll",
+      "ProductVersion": "0.15.8+1e8238ef6c08e18821edae83ac8d6b0a2bb1bb98",
+      "FileVersion": "0.15.8",
+      "SHA256": "D460626B2E1A9FA2F786E09E6C85CDF4D7B73DECA636450A0E23892C8CE6192B"
+    },
+    {
+      "File": "DocumentFormat.OpenXml.dll",
+      "ProductVersion": "3.5.1+Branch.main.Sha.3139fdfd27414548a41555f7848d5728f6e71a42.3139fdfd27414548a41555f7848d5728f6e71a42",
+      "FileVersion": "3.5.1",
+      "SHA256": "EE2A31FF79DB570E2EB98EC7513B222F2B8C6BFCB638D66C2CEC8255B0BBE499"
+    },
+    {
+      "File": "DocumentFormat.OpenXml.Framework.dll",
+      "ProductVersion": "3.5.1+Branch.main.Sha.3139fdfd27414548a41555f7848d5728f6e71a42.3139fdfd27414548a41555f7848d5728f6e71a42",
+      "FileVersion": "3.5.1",
+      "SHA256": "FF3ED8318388D84FA5BBC5736DF6144ECFA3165C0B95F6B45B5330F463EDF7AE"
+    },
+    {
+      "File": "Inkwright.dll",
+      "ProductVersion": "0.1.4+5028efe3b640193b92863f7b94f3452809d88107",
+      "FileVersion": "0.1.4.0",
+      "SHA256": "12D0E92494343E754D0032EAB6051A8C792F6B7698A0A1151117564DB5FF8C3E"
+    },
+    {
+      "File": "Quillwright.Benchmarks.dll",
+      "ProductVersion": "0.2.5+afc415dd3947fce79dc79663a84cd93526d528f2",
+      "FileVersion": "0.2.5.0",
+      "SHA256": "358251181CAFEEFE9622C7EC3476F779537F00E0050BF666CAB28ABDFA256743"
+    },
+    {
+      "File": "Quillwright.dll",
+      "ProductVersion": "0.2.5+afc415dd3947fce79dc79663a84cd93526d528f2",
+      "FileVersion": "0.2.5.0",
+      "SHA256": "3BA7360B3B0AF501996E334BF93A5AC51861C00DDA4D05BFB1A82364176F28AA"
+    },
+    {
+      "File": "Quillwright.Doc.dll",
+      "ProductVersion": "0.2.5+afc415dd3947fce79dc79663a84cd93526d528f2",
+      "FileVersion": "0.2.5.0",
+      "SHA256": "CF484C9FC3FB56590125334569C2C24855281E421C3E3195EF3B0B8A04B083E1"
+    },
+    {
+      "File": "Quillwright.Pdf.dll",
+      "ProductVersion": "0.2.5+afc415dd3947fce79dc79663a84cd93526d528f2",
+      "FileVersion": "0.2.5.0",
+      "SHA256": "D2E70883A8ECD6768DE07D6D031338AE5E72F47B8521ACB6055A5D057A58ABBB"
+    }
+  ],
+  "primaryPass": 1,
+  "measuredPasses": 1,
+  "rows": [
+    {
+      "passNumber": 1,
+      "benchmarkClass": "GenerationBenchmarks",
+      "method": "QuillwrightStreaming",
+      "methodTitle": "'Quillwright streaming'",
+      "parameters": "Paragraphs=20000",
+      "meanNs": 12350278.472222222,
+      "medianNs": 12064885.9375,
+      "errorNs": 1150808.8558933919,
+      "standardDeviationNs": 684827.8913440981,
+      "n": 9,
+      "cv": 0.05545040080548686,
+      "allocatedBytes": 18689416,
+      "reportedAllocatedBytes": 18689416,
+      "allocationNote": null,
+      "reportSha256": "016fbbac6bcaa9c00b373e2ce4fd88ca5e98700d43d754db2d69ff84b54a1f6c",
+      "reportFile": "2026-11-09/pass-1/GenerationBenchmarks.json",
+      "originalReportSha256": "601225a2e1e9a756f1bd4337bd896ad69965f101ddc45fa293c72026f804537d"
+    },
+    {
+      "passNumber": 1,
+      "benchmarkClass": "GenerationBenchmarks",
+      "method": "QuillwrightModel",
+      "methodTitle": "'Quillwright model'",
+      "parameters": "Paragraphs=20000",
+      "meanNs": 19536894.0625,
+      "medianNs": 19647109.375,
+      "errorNs": 1999061.4464254556,
+      "standardDeviationNs": 1322255.373100705,
+      "n": 10,
+      "cv": 0.06767991723099435,
+      "allocatedBytes": 19218406,
+      "reportedAllocatedBytes": 19218406,
+      "allocationNote": null,
+      "reportSha256": "016fbbac6bcaa9c00b373e2ce4fd88ca5e98700d43d754db2d69ff84b54a1f6c",
+      "reportFile": "2026-11-09/pass-1/GenerationBenchmarks.json",
+      "originalReportSha256": "601225a2e1e9a756f1bd4337bd896ad69965f101ddc45fa293c72026f804537d"
+    },
+    {
+      "passNumber": 1,
+      "benchmarkClass": "GenerationBenchmarks",
+      "method": "OpenXmlSdk",
+      "methodTitle": "'Open XML SDK'",
+      "parameters": "Paragraphs=20000",
+      "meanNs": 27021188.194444444,
+      "medianNs": 27219112.5,
+      "errorNs": 1278821.6809246528,
+      "standardDeviationNs": 761006.2702140644,
+      "n": 9,
+      "cv": 0.02816331631081002,
+      "allocatedBytes": 19629994,
+      "reportedAllocatedBytes": 19629994,
+      "allocationNote": null,
+      "reportSha256": "016fbbac6bcaa9c00b373e2ce4fd88ca5e98700d43d754db2d69ff84b54a1f6c",
+      "reportFile": "2026-11-09/pass-1/GenerationBenchmarks.json",
+      "originalReportSha256": "601225a2e1e9a756f1bd4337bd896ad69965f101ddc45fa293c72026f804537d"
+    },
+    {
+      "passNumber": 1,
+      "benchmarkClass": "LegacyBenchmarks",
+      "method": "Write",
+      "methodTitle": "'Write .doc'",
+      "parameters": "Paragraphs=20000",
+      "meanNs": 45686718.18181818,
+      "medianNs": 45763845.45454545,
+      "errorNs": 669710.6152084306,
+      "standardDeviationNs": 442972.1062178201,
+      "n": 10,
+      "cv": 0.009695861813819415,
+      "allocatedBytes": 50623556,
+      "reportedAllocatedBytes": 50623556,
+      "allocationNote": null,
+      "reportSha256": "12fa77986afc90f9cccf967b17f0229ee8261312b7ef914f06506401ccb98586",
+      "reportFile": "2026-11-09/pass-1/LegacyBenchmarks.json",
+      "originalReportSha256": "ac18aa64d8325d503b9310a085c74c70b6f855f9f598c7a92ccf2258861d74ad"
+    },
+    {
+      "passNumber": 1,
+      "benchmarkClass": "LegacyBenchmarks",
+      "method": "Read",
+      "methodTitle": "'Read .doc'",
+      "parameters": "Paragraphs=20000",
+      "meanNs": 31567336.25,
+      "medianNs": 31163390.625,
+      "errorNs": 2114555.37253418,
+      "standardDeviationNs": 1398647.4543100263,
+      "n": 10,
+      "cv": 0.04430679368171352,
+      "allocatedBytes": 53789422,
+      "reportedAllocatedBytes": 53789422,
+      "allocationNote": null,
+      "reportSha256": "12fa77986afc90f9cccf967b17f0229ee8261312b7ef914f06506401ccb98586",
+      "reportFile": "2026-11-09/pass-1/LegacyBenchmarks.json",
+      "originalReportSha256": "ac18aa64d8325d503b9310a085c74c70b6f855f9f598c7a92ccf2258861d74ad"
+    },
+    {
+      "passNumber": 1,
+      "benchmarkClass": "PdfBenchmarks",
+      "method": "Prose",
+      "methodTitle": "'Prose to PDF'",
+      "parameters": "Paragraphs=2000",
+      "meanNs": 84893766.66666666,
+      "medianNs": 83617216.66666666,
+      "errorNs": 3262078.0994600723,
+      "standardDeviationNs": 2157662.6882569706,
+      "n": 10,
+      "cv": 0.025416031977105947,
+      "allocatedBytes": 113615931,
+      "reportedAllocatedBytes": 113615931,
+      "allocationNote": null,
+      "reportSha256": "71bddd1fa66dc731297cdb19b539cafd988bb90d0a418e4645b5773e7fccf62f",
+      "reportFile": "2026-11-09/pass-1/PdfBenchmarks.json",
+      "originalReportSha256": "0f20d226ff05c65a163c53379b977391a1b9465beb2f1015bed70579fd35a4f7"
+    },
+    {
+      "passNumber": 1,
+      "benchmarkClass": "PdfBenchmarks",
+      "method": "Tagged",
+      "methodTitle": "'Prose to tagged PDF'",
+      "parameters": "Paragraphs=2000",
+      "meanNs": 97933423.33333334,
+      "medianNs": 96096583.33333334,
+      "errorNs": 6671940.957251459,
+      "standardDeviationNs": 4413075.843922226,
+      "n": 10,
+      "cv": 0.04506199920022768,
+      "allocatedBytes": 123248808,
+      "reportedAllocatedBytes": 123248808,
+      "allocationNote": null,
+      "reportSha256": "71bddd1fa66dc731297cdb19b539cafd988bb90d0a418e4645b5773e7fccf62f",
+      "reportFile": "2026-11-09/pass-1/PdfBenchmarks.json",
+      "originalReportSha256": "0f20d226ff05c65a163c53379b977391a1b9465beb2f1015bed70579fd35a4f7"
+    },
+    {
+      "passNumber": 1,
+      "benchmarkClass": "PdfBenchmarks",
+      "method": "Tabular",
+      "methodTitle": "'Table to PDF'",
+      "parameters": "Paragraphs=2000",
+      "meanNs": 48050125,
+      "medianNs": 44866825,
+      "errorNs": 7498163.690864788,
+      "standardDeviationNs": 4959571.025874561,
+      "n": 10,
+      "cv": 0.10321661027675913,
+      "allocatedBytes": 62522528,
+      "reportedAllocatedBytes": 62522528,
+      "allocationNote": null,
+      "reportSha256": "71bddd1fa66dc731297cdb19b539cafd988bb90d0a418e4645b5773e7fccf62f",
+      "reportFile": "2026-11-09/pass-1/PdfBenchmarks.json",
+      "originalReportSha256": "0f20d226ff05c65a163c53379b977391a1b9465beb2f1015bed70579fd35a4f7"
+    },
+    {
+      "passNumber": 1,
+      "benchmarkClass": "ReadingBenchmarks",
+      "method": "QuillwrightModel",
+      "methodTitle": "'Quillwright model'",
+      "parameters": "Paragraphs=20000",
+      "meanNs": 21108096.180555556,
+      "medianNs": 20969434.375,
+      "errorNs": 1111052.8888916564,
+      "standardDeviationNs": 661169.7530609962,
+      "n": 9,
+      "cv": 0.031323040571989404,
+      "allocatedBytes": 21331500,
+      "reportedAllocatedBytes": 21331500,
+      "allocationNote": null,
+      "reportSha256": "5910759b0b256ba19e5ea3f6e56e831c95ba1c097328c33dd36476498fe99484",
+      "reportFile": "2026-11-09/pass-1/ReadingBenchmarks.json",
+      "originalReportSha256": "8fa65792ca7c3c54e8677734809bcaad3c8c85a83a33b07404e69c35336a7ef6"
+    },
+    {
+      "passNumber": 1,
+      "benchmarkClass": "ReadingBenchmarks",
+      "method": "QuillwrightStreaming",
+      "methodTitle": "'Quillwright streaming text'",
+      "parameters": "Paragraphs=20000",
+      "meanNs": 19334812.1875,
+      "medianNs": 19263426.5625,
+      "errorNs": 995601.7715407581,
+      "standardDeviationNs": 658528.9282839649,
+      "n": 10,
+      "cv": 0.034059235843506425,
+      "allocatedBytes": 19754454,
+      "reportedAllocatedBytes": 19754454,
+      "allocationNote": null,
+      "reportSha256": "5910759b0b256ba19e5ea3f6e56e831c95ba1c097328c33dd36476498fe99484",
+      "reportFile": "2026-11-09/pass-1/ReadingBenchmarks.json",
+      "originalReportSha256": "8fa65792ca7c3c54e8677734809bcaad3c8c85a83a33b07404e69c35336a7ef6"
+    },
+    {
+      "passNumber": 1,
+      "benchmarkClass": "ReadingBenchmarks",
+      "method": "OpenXmlSdk",
+      "methodTitle": "'Open XML SDK'",
+      "parameters": "Paragraphs=20000",
+      "meanNs": 41831066.66666667,
+      "medianNs": 41855600,
+      "errorNs": 473713.9001144874,
+      "standardDeviationNs": 313332.4144982598,
+      "n": 10,
+      "cv": 0.007490423732080935,
+      "allocatedBytes": 16538525,
+      "reportedAllocatedBytes": 16538525,
+      "allocationNote": null,
+      "reportSha256": "5910759b0b256ba19e5ea3f6e56e831c95ba1c097328c33dd36476498fe99484",
+      "reportFile": "2026-11-09/pass-1/ReadingBenchmarks.json",
+      "originalReportSha256": "8fa65792ca7c3c54e8677734809bcaad3c8c85a83a33b07404e69c35336a7ef6"
+    }
+  ]
+}
