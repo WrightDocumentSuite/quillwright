@@ -3,7 +3,7 @@
   "repositoryUrl": "https://github.com/WrightDocumentSuite/quillwright.git",
   "projectUrl": "https://github.com/WrightDocumentSuite/quillwright",
   "rawSourceUrl": "https://raw.githubusercontent.com/WrightDocumentSuite/quillwright/{commit}/*",
-  "baselineVersion": "0.2.5",
+  "baselineVersion": "0.2.6",
   "packages": [
     {
       "id": "Quillwright",

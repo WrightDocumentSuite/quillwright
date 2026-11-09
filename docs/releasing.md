@@ -13,7 +13,7 @@ hidden commit eligible.
 The five package IDs and their exact dependency graph live in
 [`eng/release-manifest.json`](../eng/release-manifest.json). The manifest also names the stable
 release used by package validation. It must always be the latest version already
-published for all five IDs. The current baseline is 0.2.5. While building release N, keep the
+published for all five IDs. The current baseline is 0.2.6. While building release N, keep the
 baseline at the published N-1; after N is published, update `main` so the baseline becomes N and
 new APIs from that release cannot be removed unnoticed. Do not weaken an API compatibility
 diagnostic just to make the gate green: either restore compatibility or commit a reviewed
@@ -213,3 +213,5 @@ The baseline, verifier, and package-consumer helper projects write their per-run
 `artifacts/release-locks/`. Their baseline/candidate versions and runtime identifiers vary by
 invocation, so those helper locks are regenerated instead of becoming untracked source inputs.
 Library, test, sample, benchmark, and fuzz project locks remain committed and checked by CI.
+
+For a just-published dependency, isolate both `NUGET_PACKAGES` and `NUGET_HTTP_CACHE_PATH`. A clean packages directory alone can still reuse an older HTTP version index and produce NU1102. Use `dotnet restore --no-http-cache` when refreshing the new release graph, then repeat locked restore; do not clear unrelated developer caches.
