@@ -35,6 +35,14 @@ public sealed class PdfExportOptions
     /// </summary>
     public bool SubsetFonts { get; set; } = true;
 
+    /// <summary>
+    /// Decides which compromises stop the render instead of being reported afterwards: when this
+    /// answers <see langword="true"/> for any warning, <see cref="PdfExportRefusedException"/> is
+    /// raised and no document is produced. <see langword="null"/>, the default, accepts them all.
+    /// See <see cref="PdfExportRefusal"/> for ready-made policies.
+    /// </summary>
+    public Func<PdfExportWarning, bool>? RefuseWhen { get; set; }
+
     /// <summary>Whether to build a structure tree so the result is a tagged PDF.</summary>
     public bool Tagged { get; set; }
 

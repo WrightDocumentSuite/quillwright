@@ -22,10 +22,11 @@ public sealed class LoadOptions
     public Action<DocumentWarning>? OnWarning { get; init; }
 
     /// <summary>
-    /// Keeps package parts and markup the model does not represent so that saving restores
-    /// them. Turning this off produces smaller documents and loses charts, embedded objects,
-    /// VBA and custom XML. Default is <see langword="true"/>.
+    /// Has no effect: package parts and markup the model does not represent are always kept, so
+    /// macros, embedded objects and custom XML survive a save whatever this says. To remove them,
+    /// use <c>SaveSanitizedAsync</c> from <c>Quillwright.Sanitization</c>.
     /// </summary>
+    [Obsolete("This option has no effect. Package parts the model does not represent are always preserved, so it cannot be used to remove macros, embedded objects or custom XML. Use SaveSanitizedAsync to produce a clean copy.")]
     public bool PreserveUnknownContent { get; init; } = true;
 
     /// <summary>

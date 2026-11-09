@@ -87,12 +87,25 @@ public static class RevisionActions
     public static bool HasRevisions(this WordDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        return document.AllContainers
-            .SelectMany(static container => container.Blocks.Paragraphs)
-            .Any(static paragraph =>
-                paragraph.Ranges.Any(static entry => entry.Range is Revision) ||
-                paragraph.MarkFormat.MarkRevisionXml is not null);
+        return document.Sections.Any(static section => section.Properties.ChangeXml is not null) ||
+            document.AllContainers.Any(static container =>
+                container.Blocks.Paragraphs.Any(IsRevised) || container.Blocks.OfType<Table>().Any(IsRevised));
     }
+
+    private static bool IsRevised(Paragraph paragraph) =>
+        paragraph.Ranges.Any(static entry => entry.Range is Revision) ||
+        paragraph.MarkFormat.MarkRevisionXml is not null ||
+        paragraph.Format.ChangeXml is not null ||
+        paragraph.HasFormatChanges;
+
+    private static bool IsRevised(Table table) =>
+        table.Format.ChangeXml is not null ||
+        table.GridChangeXml is not null ||
+        table.Rows.Any(static row =>
+            row.Format.DeletedXml is not null ||
+            row.Format.InsertedXml is not null ||
+            row.Format.ChangeXml is not null ||
+            row.Cells.Any(static cell => cell.Format.RevisionXml is not null));
 
     private static int Resolve(WordDocument document, bool accept)
     {
@@ -107,6 +120,9 @@ public static class RevisionActions
         {
             foreach (BlockContainer container in document.AllContainers.ToArray())
                 resolved += ResolveContainer(container, accept);
+
+            if (accept)
+                resolved += AcceptSectionChanges(document);
         }
         finally
         {
@@ -114,6 +130,26 @@ public static class RevisionActions
         }
 
         document.Settings.TrackRevisions = false;
+        return resolved;
+    }
+
+    /// <summary>
+    /// Accepting a change to section properties is keeping them. Rejecting one would have to
+    /// rebuild the old properties, which is not supported, so a rejection leaves the record in
+    /// place and <see cref="HasRevisions"/> goes on reporting it.
+    /// </summary>
+    private static int AcceptSectionChanges(WordDocument document)
+    {
+        int resolved = 0;
+        foreach (Section section in document.Sections)
+        {
+            if (section.Properties.ChangeXml is null)
+                continue;
+
+            section.Properties.ChangeXml = null;
+            resolved++;
+        }
+
         return resolved;
     }
 
@@ -139,6 +175,9 @@ public static class RevisionActions
     private static int ResolveTable(BlockContainer container, Table table, bool accept)
     {
         int resolved = 0;
+        if (accept)
+            resolved += AcceptTablePropertyChanges(table);
+
         for (int i = table.Rows.Count - 1; i >= 0; i--)
         {
             TableRow row = table.Rows[i];
@@ -169,6 +208,34 @@ public static class RevisionActions
 
         if (table.Rows.Count == 0)
             container.Blocks.Remove(table);
+
+        return resolved;
+    }
+
+    /// <summary>Keeps the current table, grid and row properties and drops their records.</summary>
+    private static int AcceptTablePropertyChanges(Table table)
+    {
+        int resolved = 0;
+        if (table.Format.ChangeXml is not null)
+        {
+            table.Format = table.Format with { ChangeXml = null };
+            resolved++;
+        }
+
+        if (table.GridChangeXml is not null)
+        {
+            table.GridChangeXml = null;
+            resolved++;
+        }
+
+        foreach (TableRow row in table.Rows)
+        {
+            if (row.Format.ChangeXml is not null)
+            {
+                row.Format = row.Format with { ChangeXml = null };
+                resolved++;
+            }
+        }
 
         return resolved;
     }
@@ -204,6 +271,16 @@ public static class RevisionActions
                 paragraph.SetDeletedRuns(start, length, deleted: false);
         }
 
+        resolved += paragraph.ResolveFormatChanges(accept);
+
+        if (paragraph.Format.ChangeXml is { } record)
+        {
+            resolved++;
+            paragraph.Format = accept
+                ? paragraph.Format with { ChangeXml = null }
+                : Formats.ParagraphFormatReader.ReadRecorded(record);
+        }
+
         return resolved;
     }
 
@@ -228,8 +305,7 @@ public static class RevisionActions
             if (!breakGoes || i + 1 >= container.Blocks.Count || container.Blocks[i + 1] is not Paragraph next)
                 continue;
 
-            paragraph.AppendText(next.Text, next.RunCount > 0 ? next.FormatAt(0) : null);
-            paragraph.MarkFormat = next.MarkFormat;
+            paragraph.MergeWithFollowing(next);
             container.Blocks.RemoveAt(i + 1);
         }
 

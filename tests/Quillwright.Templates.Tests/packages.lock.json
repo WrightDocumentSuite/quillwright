@@ -162,7 +162,7 @@
       "quillwright.templates": {
         "type": "Project",
         "dependencies": {
-          "Quillwright": "[0.2.5, )"
+          "Quillwright": "[0.2.6, )"
         }
       },
       "quillwright.templates.generator": {

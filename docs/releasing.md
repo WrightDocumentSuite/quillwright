@@ -107,7 +107,7 @@ exact candidate bytes that were reviewed and passed to the protected publish job
    full local rehearsal is:
 
    ```powershell
-   pwsh ./eng/release.ps1 -ExpectedVersion 0.2.5
+   pwsh ./eng/release.ps1 -ExpectedVersion 0.2.6
    ```
 
    This requires PowerShell 7, the SDK selected by `global.json`, Git, network access to
@@ -126,7 +126,7 @@ exact candidate bytes that were reviewed and passed to the protected publish job
 
    ```bash
    bash ./eng/install-linux-fonts.sh
-   pwsh ./eng/release.ps1 -ExpectedVersion 0.2.5 -SkipTests
+   pwsh ./eng/release.ps1 -ExpectedVersion 0.2.6 -SkipTests
    ```
 
    The script uses `sudo` when the current user is not root. On another distribution, provision
@@ -141,12 +141,12 @@ exact candidate bytes that were reviewed and passed to the protected publish job
 5. Create the immutable public tag at that exact commit and push it:
 
    ```bash
-   git tag -a v0.2.5 -m "Quillwright 0.2.5"
-   git push origin v0.2.5
+   git tag -a v0.2.6 -m "Quillwright 0.2.5"
+   git push origin v0.2.6
    ```
 
    Do not move a published release tag.
-6. In the GitHub **Release** workflow, select the `v0.2.5` ref, enter `0.2.5`, and first run with
+6. In the GitHub **Release** workflow, select the `v0.2.6` ref, enter `0.2.6`, and first run with
    **publish** disabled for a publication rehearsal. That run's artifact is not reused by a
    later workflow run.
 

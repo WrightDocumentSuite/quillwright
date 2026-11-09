@@ -101,3 +101,40 @@ The manifest API intentionally starts from a complete `byte[]`. `MaxInputBytes` 
 oversized array but cannot undo the allocation or network transfer that produced it. A service
 must therefore bound the download or file read before allocating that array, then pass the same
 policy to the reader.
+
+## Removing active and linked content
+
+Reading a package, preserving what the model does not understand, and cleaning a file are separate
+operations. A load or a plain save never removes anything. To produce a clean copy, name what to
+leave out and read the report:
+
+```csharp
+using Quillwright.Sanitization;
+
+SanitizeReport report = await document.SaveSanitizedAsync(
+    "clean.docx",
+    ContentCategories.Macros | ContentCategories.EmbeddedObjects | ContentCategories.ExternalLinks);
+
+foreach (SanitizedItem item in report.Removed)
+    Console.WriteLine($"removed {item.Kind} {item.Location}");
+
+foreach (SanitizedItem item in report.Retained)
+    Console.WriteLine($"kept {item.Category}: {item.Location} {item.Detail}");
+```
+
+| Category | Removed |
+| --- | --- |
+| `Macros` | The VBA project, its data, macro-bound key customizations; the main part stops declaring itself macro-enabled |
+| `EmbeddedObjects` | OLE objects, embedded packages, ActiveX controls, and the preview pictures only they used |
+| `ExternalLinks` | Every external relationship. A hyperlink's text stays and the link goes |
+| `CustomXml` | Custom XML parts, their properties, and the data bindings of content controls |
+| `Signatures` | Digital signatures and the parts that list them |
+
+The document object is not changed. Parts, relationships, content types and the XML references to
+them are removed together, so the result stays a consistent package. A copy without macros is not a
+`.docm` any more and should not keep that extension.
+
+Field instructions such as `INCLUDEPICTURE "http://..."` name their target in text rather than
+through a relationship. Removing one means deciding what its result should become, so they stay in
+the document and appear in `Retained` as `FieldInstruction`. Check that list before treating a file
+as free of outside references.

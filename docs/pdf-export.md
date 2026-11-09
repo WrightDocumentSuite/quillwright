@@ -19,6 +19,36 @@ The render never throws for content it cannot draw. It draws what it can and say
 diagnostics what it left out, so a batch job can go on and a person can see afterwards which
 files need looking at.
 
+Where a document with something missing is worse than no document, say which compromises stop the
+render. The diagnostics are the single source for this: `RefuseWhen` sees every `PdfExportWarning`,
+and if it accepts none of the ones it is shown nothing changes.
+
+```csharp
+var options = new PdfExportOptions { RefuseWhen = PdfExportRefusal.Omissions };
+
+try
+{
+    document.SaveAsPdf("contract.pdf", options);
+}
+catch (PdfExportRefusedException refused)
+{
+    foreach (PdfExportWarning warning in refused.Refused)
+        Console.WriteLine(warning);
+}
+```
+
+| Policy | Refuses |
+| --- | --- |
+| `PdfExportRefusal.Omissions` | Skipped images and content the renderer does not draw |
+| `PdfExportRefusal.OmissionsAndFontSubstitutions` | The above, and any font drawn with another face |
+| `PdfExportRefusal.AnyCompromise` | Every warning, including approximated layout |
+| Your own `Func<PdfExportWarning, bool>` | Whatever it selects, for example one font family through `Subject` |
+
+The whole render runs before the decision, so the exception lists every refused compromise at once.
+No document is returned and a file named in `SaveAsPdf` is left as it was. A metric-compatible face
+such as Carlito for Calibri still counts as a substitution, because a different font was drawn; a
+policy that accepts those can test `Subject`.
+
 ## Composing rather than saving
 
 `SaveAsPdf` is the short way round. When the result has to be signed, encrypted or made

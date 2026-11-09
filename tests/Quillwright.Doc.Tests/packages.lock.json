@@ -144,7 +144,7 @@
       "quillwright.doc": {
         "type": "Project",
         "dependencies": {
-          "Quillwright": "[0.2.5, )"
+          "Quillwright": "[0.2.6, )"
         }
       }
     }

@@ -143,3 +143,20 @@ round-trip, expected-refusal and validator-rejection theories each remain visibl
 collection is absent, rather than silently disappearing from discovery.
 
 Compare the totals, not just the failures, when a change to the corpus wiring is in the diff.
+
+## Release gates against real files
+
+`.github/workflows/corpus.yml` runs every test project against the Open XML SDK test assets, pinned
+by commit and hash in `eng/corpus/manifest.json`. It runs weekly and on demand, not on pull requests,
+so nobody has to download someone else's documents to contribute. `verify_results.py` fails the job
+if a test skips that the manifest does not allow, or if fewer tests ran than the manifest expects.
+The Telerik collection has no public pinned source, so tests that need it are on the allowed list.
+
+On Windows the fetcher uses extended filesystem paths: the upstream generated sources exceed
+`MAX_PATH` when staged under a normal checkout. No machine-wide long-path setting is needed.
+The temporary extraction directory stays under the requested corpus root; a pre-existing corpus
+destination is refused so that stale files cannot mix with the pinned archive.
+
+Every corpus round trip also goes through `PackageInvariants`: unique zip entries, relationship
+targets that exist, content types for every part. Only problems the save introduced count, because
+the corpus contains files that were already invalid when they were written.

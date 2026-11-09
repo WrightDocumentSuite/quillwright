@@ -48,6 +48,22 @@ explicitly with an attribute.
 
 ## Generator diagnostics
 
+To inspect the generated binders on disk, build with:
+
+```sh
+dotnet build -c Release -t:Rebuild -p:EmitCompilerGeneratedFiles=true
+```
+
+`Rebuild` ensures the compiler runs even when the project was already built: changing only the
+emit flag can leave compilation up to date and produce no saved binder for that project.
+
+The generator uses bounded file names based on a SHA-256 hash of the complete metadata name,
+including the namespace, containing types, and generic arity. Long or nested model names therefore
+do not exceed the filesystem's file-name limit. Identical type identities produce identical names
+across builds. The SDK writes these files beneath its intermediate output directory; if setting
+`CompilerGeneratedFilesOutputPath`, keep that directory outside the project's `Compile` globs
+to avoid compiling saved output again on the next build.
+
 | Code | Situation |
 | --- | --- |
 | `QWT001` | A `[WordTemplate]` type or one of its containing types is not `partial` |

@@ -65,6 +65,19 @@ if (document.HasRevisions())
 Accepting keeps insertions and drops deletions; rejecting does the opposite. Both clear the
 markers and turn `Settings.TrackRevisions` off.
 
+Recorded formatting and paragraph-property changes are settled the same way: rejecting puts back
+what the record preserved. A run changed several times rejects to how it looked before the first
+change, because only the earliest record is kept.
+
+Table, row, grid and section property changes count for `HasRevisions`. Accepting keeps the current
+values and drops the record. Rejecting them is not supported: the record stays in place and
+`HasRevisions` keeps reporting it. Cell-level revisions (`cellIns`, `cellDel`, `cellMerge`,
+`tcPrChange`) are detected but neither accepted nor rejected.
+
+When a paragraph mark goes, everything in the following paragraph moves up with its runs, pictures,
+links and bookmarks intact. The merged paragraph takes the following paragraph's formatting, since
+paragraph formatting lives in the mark and that is the mark that survives.
+
 ### Recording them
 
 ```csharp

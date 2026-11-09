@@ -9,6 +9,12 @@ public sealed class TemplateGeneratorDiagnosticsTests
 {
     private static (Diagnostic[] Diagnostics, int GeneratedSources) RunGenerator(string source)
     {
+        (GeneratorDriverRunResult result, _) = Compile(source);
+        return ([.. result.Diagnostics], result.GeneratedTrees.Length);
+    }
+
+    private static (GeneratorDriverRunResult Result, Compilation Output) Compile(string source)
+    {
         var parseOptions = new CSharpParseOptions(LanguageVersion.Preview);
         CSharpCompilation compilation = CSharpCompilation.Create(
             "TemplateGeneratorTest",
@@ -28,9 +34,59 @@ public sealed class TemplateGeneratorDiagnosticsTests
         GeneratorDriver driver = CSharpGeneratorDriver.Create(
             [new TemplateGenerator().AsSourceGenerator()],
             parseOptions: parseOptions);
-        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out _, out _);
+        driver = driver.RunGeneratorsAndUpdateCompilation(compilation, out Compilation output, out _);
         GeneratorDriverRunResult result = driver.GetRunResult();
-        return ([.. result.Diagnostics], result.GeneratedTrees.Length);
+        return (result, output);
+    }
+
+    [Fact]
+    public void LongMetadataNames_HaveBoundedDeterministicFileNames()
+    {
+        string longName = new('N', 300);
+        string source = $$"""
+            using Quillwright.Templates;
+            namespace {{longName}}
+            {
+                public partial class {{longName}}<T>
+                {
+                    [WordTemplate]
+                    public partial class @class<U> { }
+                }
+            }
+            """;
+
+        (GeneratorDriverRunResult first, Compilation output) = Compile(source);
+        (GeneratorDriverRunResult second, _) = Compile(source);
+        GeneratedSourceResult generated = Assert.Single(Assert.Single(first.Results).GeneratedSources);
+        Assert.Empty(first.Diagnostics);
+        Assert.DoesNotContain(output.GetDiagnostics(TestContext.Current.CancellationToken), d => d.Severity == DiagnosticSeverity.Error);
+        Assert.InRange(generated.HintName.Length, 1, 100);
+        Assert.EndsWith(".Template.g.cs", generated.HintName, StringComparison.Ordinal);
+        Assert.Equal(generated.HintName, Assert.Single(Assert.Single(second.Results).GeneratedSources).HintName);
+    }
+
+    [Fact]
+    public void SimilarMetadataNames_ProduceDistinctFileNamesAndCompile()
+    {
+        const string source = """
+            using Quillwright.Templates;
+            namespace A.B { [WordTemplate] public partial class C { } }
+            namespace A_B { [WordTemplate] public partial class C { } }
+            namespace Containers
+            {
+                public partial class B { [WordTemplate] public partial class C { } }
+                public partial class B<T> { [WordTemplate] public partial class C { } }
+                public partial class B<T, U> { [WordTemplate] public partial class C { } }
+            }
+            namespace @event { [WordTemplate] public partial class @class { } }
+            """;
+
+        (GeneratorDriverRunResult result, Compilation output) = Compile(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.DoesNotContain(output.GetDiagnostics(TestContext.Current.CancellationToken), d => d.Severity == DiagnosticSeverity.Error);
+        var generated = Assert.Single(result.Results).GeneratedSources;
+        Assert.Equal(6, generated.Length);
+        Assert.Equal(6, generated.Select(s => s.HintName).Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }
 
     [Fact]

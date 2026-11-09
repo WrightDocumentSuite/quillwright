@@ -700,10 +700,17 @@ internal sealed class OpcPackage : IAsyncDisposable
     /// <summary>Creates a new part and registers its content type override (write mode).</summary>
     public async ValueTask<Stream> CreatePartAsync(string partPath, string contentType, CancellationToken cancellationToken)
     {
+        ClaimPartName(partPath);
         RegisterContentType(partPath, contentType);
-        _writtenParts.Add(partPath);
         ZipArchiveEntry entry = _archive.CreateEntry(OpcPath.ToEntryName(partPath), CompressionLevel.Optimal);
         return await entry.OpenAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>A zip keeps both entries of a duplicate name and readers pick one, so a clash is a bug to stop on.</summary>
+    private void ClaimPartName(string partPath)
+    {
+        if (!_writtenParts.Add(partPath))
+            throw new InvalidOperationException($"The package part '{partPath}' would be written twice.");
     }
 
     /// <summary>
@@ -725,7 +732,7 @@ internal sealed class OpcPackage : IAsyncDisposable
     /// </summary>
     public async ValueTask WriteRawPartAsync(string partPath, byte[] content, CancellationToken cancellationToken)
     {
-        _writtenParts.Add(partPath);
+        ClaimPartName(partPath);
         ZipArchiveEntry entry = _archive.CreateEntry(OpcPath.ToEntryName(partPath), CompressionLevel.Optimal);
         Stream stream = await entry.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using (stream.ConfigureAwait(false))

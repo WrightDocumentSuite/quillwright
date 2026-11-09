@@ -53,7 +53,24 @@ public static class PdfExporter
         tagger?.Build();
 
         ApplyMetadata(context);
+        EnforceRefusals(settings, diagnostics, pdf);
         return new PdfExportResult(pdf, diagnostics, pages.Count);
+    }
+
+    /// <summary>
+    /// Runs last so that a refusal can name every compromise the render made, not just the first.
+    /// </summary>
+    private static void EnforceRefusals(PdfExportOptions options, PdfExportDiagnostics diagnostics, PdfDocument pdf)
+    {
+        if (options.RefuseWhen is not { } refuses)
+            return;
+
+        PdfExportWarning[] refused = [.. diagnostics.Where(refuses)];
+        if (refused.Length == 0)
+            return;
+
+        pdf.Dispose();
+        throw new PdfExportRefusedException(refused, diagnostics);
     }
 
     /// <summary>

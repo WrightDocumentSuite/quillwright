@@ -15,6 +15,11 @@ internal static class RunFormatReader
         return format;
     }
 
+    /// <summary>The formatting a <c>w:rPrChange</c> record preserved.</summary>
+    /// <param name="recordXml">The record as stored on the run.</param>
+    public static RunFormat ReadRecorded(string recordXml) =>
+        RecordedMarkup.ReadChild(recordXml, "rPr", Read) ?? RunFormat.Default;
+
     private static RunFormat ReadChild(XmlReader xml, string name, RunFormat format)
     {
         switch (name)

@@ -49,11 +49,10 @@ internal static partial class DocxLoader
             preserved.PathFor(DocxSchema.RelEndnotes, DocxSchema.PartEndnotes),
             preserved.PathFor(DocxSchema.RelComments, DocxSchema.PartComments),
             DocxSchema.PartCoreProperties,
-            DocxSchema.PartExtendedProperties,
             DocxSchema.PartCustomProperties,
         };
 
-        Dictionary<string, string> headerFooterParts = CollectHeaderFooterParts(preserved, modelled);
+        Dictionary<string, (string Path, bool IsFooter)> headerFooterParts = CollectHeaderFooterParts(preserved, modelled);
         foreach (string path in modelled)
         {
             if (package.PartExists(path))
@@ -174,16 +173,20 @@ internal static partial class DocxLoader
         return main.Target is null ? null : OpcPath.Resolve("/", main.Target);
     }
 
-    private static Dictionary<string, string> CollectHeaderFooterParts(PreservedPackage preserved, HashSet<string> modelled)
+    /// <summary>
+    /// The header and footer parts of the document. What a part is comes from the relationship
+    /// that points at it: a package may name its parts anything it likes.
+    /// </summary>
+    private static Dictionary<string, (string Path, bool IsFooter)> CollectHeaderFooterParts(PreservedPackage preserved, HashSet<string> modelled)
     {
-        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var result = new Dictionary<string, (string Path, bool IsFooter)>(StringComparer.Ordinal);
         foreach (OpcRelationship relationship in preserved.MainRelationships)
         {
             if ((!relationship.Is(DocxSchema.RelHeader) && !relationship.Is(DocxSchema.RelFooter)) || relationship.IsExternal)
                 continue;
 
             string path = OpcPath.Resolve(preserved.MainPartPath, relationship.Target);
-            result[relationship.Id] = path;
+            result[relationship.Id] = (path, relationship.Is(DocxSchema.RelFooter));
             modelled.Add(path);
         }
 

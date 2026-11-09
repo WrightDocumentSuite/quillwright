@@ -13,6 +13,11 @@ internal readonly record struct ParagraphProperties(
 /// <summary>Reads paragraph formatting (<c>w:pPr</c>).</summary>
 internal static class ParagraphFormatReader
 {
+    /// <summary>The formatting a <c>w:pPrChange</c> record preserved.</summary>
+    /// <param name="recordXml">The record as stored on the paragraph.</param>
+    public static ParagraphFormat ReadRecorded(string recordXml) =>
+        RecordedMarkup.ReadChild(recordXml, "pPr", static reader => Read(reader).Format) ?? ParagraphFormat.Default;
+
     /// <summary>Reads a <c>w:pPr</c> element, consuming it.</summary>
     public static ParagraphProperties Read(XmlReader xml)
     {

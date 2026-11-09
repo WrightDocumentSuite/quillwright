@@ -1,0 +1,71 @@
+name: Corpus integration
+
+# What the README says about real Word files is checked here, against a pinned upstream corpus.
+# It runs on a schedule and on demand rather than on every pull request, so a contributor is never
+# asked to download someone else's documents.
+
+on:
+  schedule:
+    - cron: "41 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: corpus-integration-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  DOTNET_NOLOGO: true
+  NUGET_XMLDOC_MODE: skip
+
+jobs:
+  corpus:
+    name: Pinned corpus
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - name: Check out the public snapshot
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install the pinned .NET feature band
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          global-json-file: global.json
+      - name: Fetch and verify the pinned corpus
+        shell: pwsh
+        run: python eng/corpus/fetch.py --manifest eng/corpus/manifest.json --root "$env:RUNNER_TEMP/qc" --cache "$env:RUNNER_TEMP/qc-cache"
+      - name: Restore
+        run: dotnet restore Quillwright.slnx
+      - name: Build
+        run: dotnet build Quillwright.slnx --configuration Release --no-restore
+      - name: Run every test project against the corpus
+        shell: pwsh
+        env:
+          # The second collection the tests can read has no public pinned source, so it is
+          # named here as absent rather than left to whatever is beside the checkout.
+          QUILLWRIGHT_CORPUS_TELERIK: ${{ runner.temp }}/qc-telerik-is-absent
+        run: |
+          $env:QUILLWRIGHT_CORPUS_OPENXML = "$env:RUNNER_TEMP/qc/Open-XML-SDK-3.5.1"
+          $status = 0
+          foreach ($project in Get-ChildItem tests -Filter '*.Tests.csproj' -Recurse) {
+            dotnet test $project.FullName --configuration Release --no-build --no-restore `
+              --results-directory artifacts/test-results/corpus `
+              --logger "trx;LogFileName=$($project.BaseName).trx"
+            if ($LASTEXITCODE -ne 0) { $status = 1 }
+          }
+          exit $status
+      - name: Reject corpus skips and incomplete test runs
+        if: always()
+        run: python eng/corpus/verify_results.py --manifest eng/corpus/manifest.json --results artifacts/test-results/corpus
+      - name: Upload corpus test results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: corpus-test-results
+          path: artifacts/test-results/corpus/*.trx
+          if-no-files-found: error
+          retention-days: 14

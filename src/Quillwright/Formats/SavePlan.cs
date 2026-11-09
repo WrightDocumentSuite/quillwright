@@ -22,6 +22,16 @@ internal sealed class SavePlan
     private readonly Dictionary<HeaderFooter, string> _headerFooterIds = [];
     private readonly Dictionary<string, PartImages> _partImages = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PartHyperlinks> _partHyperlinks = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Every part name already spoken for: copied from the package, or held by a model object
+    /// from an earlier save. A name is only ever handed out after it has been claimed here,
+    /// because writing a second part under a taken name replaces the first one's data.
+    /// </summary>
+    private readonly HashSet<string> _reservedParts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Which image holds each media part name, so a stale name can be told from a real one.</summary>
+    private readonly Dictionary<string, ImageData> _mediaOwners = new(StringComparer.OrdinalIgnoreCase);
     private int _nextMediaNumber = 1;
     private int _nextHeaderNumber = 1;
     private int _nextFooterNumber = 1;
@@ -40,6 +50,21 @@ internal sealed class SavePlan
 
         foreach (OpcRelationship relationship in MainRelationships)
             _nextMediaNumber = Math.Max(_nextMediaNumber, ExtractTrailingNumber(relationship.Target) + 1);
+
+        if (preserved is not null)
+            _reservedParts.UnionWith(preserved.Parts.Keys);
+
+        foreach (HeaderFooter part in document.HeaderFooters)
+        {
+            if (part.PartPath is { } path)
+                _reservedParts.Add(path);
+        }
+
+        foreach (ImageData image in document.Media)
+        {
+            if (image.PartPath is { } path && _mediaOwners.TryAdd(path, image))
+                _reservedParts.Add(path);
+        }
     }
 
     /// <summary>Absolute name of the main document part.</summary>
@@ -283,7 +308,7 @@ internal sealed class SavePlan
         if (part.RelationshipId is { } existing && MainRelationships.Any(r => r.Id == existing))
         {
             _headerFooterIds[part] = existing;
-            RegeneratedParts.Add(part.PartPath ?? DefaultHeaderFooterPath(part));
+            RegeneratedParts.Add(part.PartPath ??= DefaultHeaderFooterPath(part));
             return;
         }
 
@@ -298,11 +323,44 @@ internal sealed class SavePlan
     /// <summary>Gives an image a part of its own, unless it already came from one.</summary>
     private void PlanMedia(ImageData image)
     {
-        if (image.PartPath is not null && _preserved?.Parts.ContainsKey(image.PartPath) == true)
-            return;
+        if (!HoldsItsPartName(image))
+        {
+            image.PartPath = NextFreePartName("/word/media/image", ref _nextMediaNumber, image.Extension);
+            _mediaOwners[image.PartPath] = image;
+        }
 
-        image.PartPath ??= $"/word/media/image{_nextMediaNumber++}.{image.Extension}";
-        NewMedia[image.PartPath] = image;
+        // A part read from the package is copied through; anything else has to be written.
+        if (_preserved?.Parts.ContainsKey(image.PartPath!) != true)
+            NewMedia[image.PartPath!] = image;
+    }
+
+    /// <summary>
+    /// Whether an image can keep the name it has. An image added from another document brings
+    /// that document's name along, which here may belong to something else entirely.
+    /// </summary>
+    private bool HoldsItsPartName(ImageData image)
+    {
+        if (image.PartPath is not { } path)
+            return false;
+
+        if (_mediaOwners.TryGetValue(path, out ImageData? owner))
+            return ReferenceEquals(owner, image);
+
+        if (!_reservedParts.Add(path))
+            return false;
+
+        _mediaOwners[path] = image;
+        return true;
+    }
+
+    private string NextFreePartName(string prefix, ref int number, string extension)
+    {
+        while (true)
+        {
+            string candidate = $"{prefix}{number++}.{extension}";
+            if (_reservedParts.Add(candidate))
+                return candidate;
+        }
     }
 
     /// <summary>The images one part points at, and the ids it is free to give new ones.</summary>
@@ -375,8 +433,8 @@ internal sealed class SavePlan
     }
 
     private string DefaultHeaderFooterPath(HeaderFooter part) => part.IsFooter
-        ? $"/word/footer{_nextFooterNumber++}.xml"
-        : $"/word/header{_nextHeaderNumber++}.xml";
+        ? NextFreePartName("/word/footer", ref _nextFooterNumber, "xml")
+        : NextFreePartName("/word/header", ref _nextHeaderNumber, "xml");
 
     private static int ExtractTrailingNumber(string target)
     {

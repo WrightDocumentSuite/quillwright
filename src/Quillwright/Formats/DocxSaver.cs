@@ -82,6 +82,12 @@ internal static partial class DocxSaver
                     new OpcRelationship("rId2", DocxSchema.RelCoreProperties, "docProps/core.xml"),
                 ];
 
+        // Clearing the last custom property takes the part away, and a relationship to a part
+        // that is not in the package is a broken package. A relationship that was already
+        // dangling when the file was loaded is the file's own and is carried over as it stood.
+        if (preserved?.PresentModelledParts.Contains(DocxSchema.PartCustomProperties) == true && !plan.WritesCustomProperties)
+            root.RemoveAll(static relationship => relationship.Is(DocxSchema.RelCustomProperties));
+
         // A document that gained its first custom property also needs the relationship that
         // makes the new part reachable; one that already had the part keeps its own id.
         var ids = new RelationshipIdAllocator();

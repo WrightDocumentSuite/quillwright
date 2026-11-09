@@ -137,12 +137,11 @@ internal static partial class DocxLoader
         OpcPackage package,
         LoadContext context,
         BodyReader body,
-        Dictionary<string, string> partsByRelationship,
+        Dictionary<string, (string Path, bool IsFooter)> partsByRelationship,
         CancellationToken cancellationToken)
     {
-        foreach ((string relationshipId, string partPath) in partsByRelationship)
+        foreach ((string relationshipId, (string partPath, bool isFooter)) in partsByRelationship)
         {
-            bool isFooter = partPath.Contains("footer", StringComparison.OrdinalIgnoreCase);
             var part = new HeaderFooter(context.Document, isFooter)
             {
                 PartPath = partPath,
@@ -151,9 +150,21 @@ internal static partial class DocxLoader
 
             await ReadPartAsync(package, partPath, context, cancellationToken, xml =>
             {
-                StylesPartReader.MoveToRoot(xml, isFooter ? "ftr" : "hdr");
+                // The content is read whichever root it has; a part whose root disagrees with
+                // its relationship is worth a warning, but not worth losing what is in it.
+                while (xml.Read() && xml.NodeType != XmlNodeType.Element)
+                {
+                }
+
                 if (xml.NodeType != XmlNodeType.Element)
                     return;
+
+                if (xml.LocalName != (isFooter ? "ftr" : "hdr"))
+                {
+                    context.Warn(
+                        Diagnostics.WarningCode.UnexpectedElement,
+                        $"The relationship calls '{partPath}' a {(isFooter ? "footer" : "header")}, but its root element is '{xml.LocalName}'.");
+                }
 
                 part.Attributes = XmlHelp.CaptureRootAttributes(xml);
                 body.ReadBlocks(xml, part);

@@ -22,7 +22,7 @@
     <Authors>Pavel Deecalov</Authors>
     <Copyright>Copyright 2026 Pavel Deecalov</Copyright>
     <Product>Quillwright</Product>
-    <Version>0.2.5</Version>
+    <Version>0.2.6</Version>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryType>git</RepositoryType>
     <RepositoryUrl>https://github.com/WrightDocumentSuite/quillwright.git</RepositoryUrl>

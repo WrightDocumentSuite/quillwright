@@ -11,8 +11,8 @@
     that has both checkouts, which is nobody who clones this.
   -->
   <ItemGroup Label="PDF">
-    <PackageVersion Include="Inkwright" Version="[0.1.4]" />
-    <PackageVersion Include="Inkwright.Layout" Version="[0.1.4]" />
+    <PackageVersion Include="Inkwright" Version="[0.1.5]" />
+    <PackageVersion Include="Inkwright.Layout" Version="[0.1.5]" />
     <!-- Keep the PDF adapter on the same audited cryptography servicing release as Inkwright. -->
     <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
   </ItemGroup>

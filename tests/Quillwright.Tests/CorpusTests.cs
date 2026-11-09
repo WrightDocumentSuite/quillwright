@@ -143,6 +143,7 @@ public class CorpusTests
 
         using MemoryStream saved = await DocumentFixture.SaveAsync(document);
         AssertPartsSurvived(path, saved);
+        PackageInvariants.AssertNoNewProblems(path, saved);
         AssertOpaquePartsUnchanged(path, originalPackage, plan.RegeneratedParts, saved);
 
         saved.Position = 0;

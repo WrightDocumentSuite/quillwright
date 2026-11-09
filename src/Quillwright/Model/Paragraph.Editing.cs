@@ -504,18 +504,119 @@ public sealed partial class Paragraph
             if (runs[i].Start < start || runs[i].End > start + length)
                 continue;
 
-            RunFormat original = runs[i].Format;
-            RunFormat changed = transform(original);
-
-            // A recorded formatting change carries what the formatting was, so that rejecting
-            // it can put the run back rather than guess at what it looked like.
-            runs[i].Format = tracking is null || changed == original
-                ? changed
-                : changed with { ChangeXml = Editing.RevisionRecorder.FormatChange(original, tracking) };
+            runs[i].Format = Recorded(runs[i].Format, transform, tracking);
         }
 
         MergeRuns();
         return this;
+    }
+
+    /// <summary>
+    /// Applies a formatting change, recording what the formatting was when changes are being
+    /// tracked. A run changed twice keeps its first record: rejecting has to go back to how the
+    /// run looked before anyone touched it, not to the step in between.
+    /// </summary>
+    private static RunFormat Recorded(RunFormat original, Func<RunFormat, RunFormat> transform, RevisionTracking? tracking)
+    {
+        RunFormat changed = transform(original);
+        return tracking is null || changed == original
+            ? changed
+            : changed with { ChangeXml = original.ChangeXml ?? Editing.RevisionRecorder.FormatChange(original, tracking) };
+    }
+
+    /// <summary>Whether a run or the paragraph mark carries a recorded formatting change.</summary>
+    internal bool HasFormatChanges
+    {
+        get
+        {
+            if (MarkFormat.ChangeXml is not null)
+                return true;
+
+            foreach (RunSpan run in _runs)
+            {
+                if (run.Format.ChangeXml is not null)
+                    return true;
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Settles the recorded formatting changes of the runs and the paragraph mark: accepting
+    /// drops the record and keeps the new look, rejecting puts back what the record preserved.
+    /// </summary>
+    /// <param name="accept">Whether the changes are accepted.</param>
+    /// <returns>How many records were settled.</returns>
+    internal int ResolveFormatChanges(bool accept)
+    {
+        int resolved = 0;
+        Span<RunSpan> runs = CollectionsMarshal.AsSpan(_runs);
+        for (int i = 0; i < runs.Length; i++)
+        {
+            if (runs[i].Format.ChangeXml is not { } record)
+                continue;
+
+            resolved++;
+            runs[i].Format = accept
+                ? runs[i].Format with { ChangeXml = null }
+                : Formats.RunFormatReader.ReadRecorded(record);
+        }
+
+        if (MarkFormat.ChangeXml is { } markRecord)
+        {
+            resolved++;
+            MarkFormat = accept
+                ? MarkFormat with { ChangeXml = null }
+                : Formats.RunFormatReader.ReadRecorded(markRecord) with { MarkRevisionXml = MarkFormat.MarkRevisionXml };
+        }
+
+        if (resolved > 0)
+            MergeRuns();
+
+        return resolved;
+    }
+
+    /// <summary>
+    /// Takes in everything the following paragraph holds: runs, objects, marks and wrappers, at
+    /// their new offsets. The paragraph mark between the two is what went, so the mark that
+    /// survives is the following paragraph's, and paragraph formatting lives in the mark.
+    /// </summary>
+    /// <param name="next">The following paragraph; left empty.</param>
+    internal void MergeWithFollowing(Paragraph next)
+    {
+        int offset = _length;
+        AppendChars(next.AsSpan());
+
+        foreach (RunSpan run in next._runs)
+            _runs.Add(run with { Start = run.Start + offset });
+
+        if (next._objects is { } objects)
+        {
+            foreach (AnchoredObject anchored in objects)
+            {
+                (_objects ??= []).Add(new AnchoredObject { Offset = anchored.Offset + offset, Object = anchored.Object });
+                Anchor(anchored.Object);
+            }
+        }
+
+        if (next._marks is { } marks)
+        {
+            foreach (AnchoredMark anchored in marks)
+                (_marks ??= []).Add(new AnchoredMark { Offset = anchored.Offset + offset, Mark = anchored.Mark });
+        }
+
+        if (next._ranges is { } ranges)
+        {
+            foreach (AnchoredRange anchored in ranges)
+                (_ranges ??= []).Add(new AnchoredRange { Start = anchored.Start + offset, Length = anchored.Length, Range = anchored.Range });
+        }
+
+        Format = next.Format;
+        MarkFormat = next.MarkFormat;
+        IsSectionBreakCarrier |= next.IsSectionBreakCarrier;
+        MergeRuns();
+        next.Clear();
     }
 
     /// <summary>
@@ -565,10 +666,11 @@ public sealed partial class Paragraph
     public Paragraph ApplyFormat(Func<RunFormat, RunFormat> transform)
     {
         ArgumentNullException.ThrowIfNull(transform);
+        RevisionTracking? tracking = Document?.ActiveTracking;
         Span<RunSpan> runs = CollectionsMarshal.AsSpan(_runs);
         for (int i = 0; i < runs.Length; i++)
-            runs[i].Format = transform(runs[i].Format);
-        MarkFormat = transform(MarkFormat);
+            runs[i].Format = Recorded(runs[i].Format, transform, tracking);
+        MarkFormat = Recorded(MarkFormat, transform, tracking);
         return this;
     }
 

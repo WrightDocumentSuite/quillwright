@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -324,9 +325,13 @@ public sealed class TemplateGenerator : IIncrementalGenerator
             ? string.Join("+", parts)
             : type.ContainingNamespace.ToDisplayString() + "::" + string.Join("+", parts);
 
-        var hint = new StringBuilder((metadataName.Length * 4) + 24).Append("QWT_");
-        foreach (char character in metadataName)
-            hint.Append(((int)character).ToString("X4", CultureInfo.InvariantCulture));
+        // Hint names become physical file names with EmitCompilerGeneratedFiles. Hash the full
+        // identity (including containers and generic arity) to keep names bounded and stable.
+        using SHA256 sha256 = SHA256.Create();
+        byte[] hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(metadataName));
+        var hint = new StringBuilder(82).Append("QWT_");
+        foreach (byte value in hash)
+            hint.Append(value.ToString("X2", CultureInfo.InvariantCulture));
 
         return hint.Append(".Template.g.cs").ToString();
     }
